@@ -1,0 +1,3362 @@
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import {
+  loadAll,
+  upsertProfile,
+  saveProgress,
+  sendNudge,
+  callClaude,
+} from "./api.js";
+
+/* ============================================================
+   Majlis — an Arabic tutor powered by Claude
+   Design: "manuscript study". Deep ink-teal canvas, Arabic set
+   in Amiri on parchment cards. Gold = voice. Teal = mastery.
+   Rose = correction. Everything else kept quiet.
+   ============================================================ */
+
+const T = {
+  canvas: "#0E1A1C",
+  panel: "#15292B",
+  panelHi: "#1B3335",
+  edge: "#23403F",
+  parchment: "#F3ECDB",
+  parchmentEdge: "#E4D7BA",
+  inkText: "#13211F",
+  cream: "#ECE5D5",
+  muted: "#8FA8A3",
+  gold: "#E0A33E",
+  goldSoft: "#F0C879",
+  teal: "#3FB89C",
+  tealDim: "#21534B",
+  rose: "#E0908B",
+  roseDim: "#3E2725",
+};
+
+const DIALECTS = [
+  "Modern Standard Arabic (MSA)",
+  "Egyptian",
+  "Levantine",
+  "Gulf",
+  "Maghrebi",
+];
+const LEVELS = ["Brand new", "Beginner", "Intermediate", "Advanced"];
+const GOALS = [
+  "Everyday conversation",
+  "Travel",
+  "Reading & script",
+  "Family & roots",
+  "Business",
+];
+
+const VOICE_PREFS = {
+  "Modern Standard Arabic (MSA)": ["ar-sa", "ar-001", "ar"],
+  Egyptian: ["ar-eg", "ar-sa", "ar"],
+  Levantine: ["ar-lb", "ar-sy", "ar-jo", "ar-sa", "ar"],
+  Gulf: ["ar-sa", "ar-ae", "ar"],
+  Maghrebi: ["ar-ma", "ar-dz", "ar-sa", "ar"],
+};
+
+const GREETINGS = {
+  "Modern Standard Arabic (MSA)": {
+    arabic: "مرحباً! أنا معلّمك. هل أنت مستعدّ؟",
+    translit: "marḥaban! ana muʿallimuk. hal anta mustaʿidd?",
+    english: "Hello! I'm your teacher. Are you ready?",
+  },
+  Egyptian: {
+    arabic: "أهلاً! أنا مدرّسك. جاهز نبدأ؟",
+    translit: "ahlan! ana mudarrisak. gahez nibtedi?",
+    english: "Hi! I'm your teacher. Ready to start?",
+  },
+  Levantine: {
+    arabic: "مرحبا! أنا معلّمك. جاهز نبلّش؟",
+    translit: "marḥaba! ana mʿallmak. jahez nballesh?",
+    english: "Hi! I'm your teacher. Ready to begin?",
+  },
+  Gulf: {
+    arabic: "هلا! أنا معلّمك. جاهز نبدأ؟",
+    translit: "hala! ana mʿallimk. yahez nabda?",
+    english: "Hi! I'm your teacher. Ready to start?",
+  },
+  Maghrebi: {
+    arabic: "سلام! أنا معلّمك. واجد نبداو؟",
+    translit: "salam! ana mʿallmek. wajed nebdaw?",
+    english: "Hi! I'm your teacher. Ready to start?",
+  },
+};
+
+const LESSON_TOPICS = [
+  "Greetings",
+  "Numbers 1–10",
+  "Ordering food",
+  "Asking directions",
+  "Family",
+  "Shopping",
+  "Telling time",
+  "Small talk",
+];
+
+/* the 28 letters — isolated glyph, name, sound, a plain hint,
+   and one simple example word. nonConnector = never joins to
+   the letter that follows it. */
+const LETTERS = [
+  { ar: "ا", name: "alif", sound: "a / aa", hint: "A long \"aa\" like in \"father\". Often it just carries other vowel sounds.", word: "أسد", wordTranslit: "asad", wordEn: "lion", nonConnector: true },
+  { ar: "ب", name: "baa", sound: "b", hint: "Just like the English \"b\".", word: "بيت", wordTranslit: "bayt", wordEn: "house" },
+  { ar: "ت", name: "taa", sound: "t", hint: "Like the English \"t\".", word: "تمر", wordTranslit: "tamr", wordEn: "dates" },
+  { ar: "ث", name: "thaa", sound: "th", hint: "Like \"th\" in \"think\".", word: "ثلج", wordTranslit: "thalj", wordEn: "snow" },
+  { ar: "ج", name: "jeem", sound: "j", hint: "Like \"j\" in \"jam\". In Egyptian it's a hard \"g\".", word: "جمل", wordTranslit: "jamal", wordEn: "camel" },
+  { ar: "ح", name: "Haa", sound: "H", hint: "A breathy H from deep in the throat — like fogging up a mirror.", word: "حليب", wordTranslit: "Haleeb", wordEn: "milk" },
+  { ar: "خ", name: "khaa", sound: "kh", hint: "A raspy \"kh\", like the \"ch\" in Scottish \"loch\".", word: "خبز", wordTranslit: "khubz", wordEn: "bread" },
+  { ar: "د", name: "daal", sound: "d", hint: "Like the English \"d\".", word: "دار", wordTranslit: "daar", wordEn: "home", nonConnector: true },
+  { ar: "ذ", name: "dhaal", sound: "dh", hint: "Like \"th\" in \"this\".", word: "ذهب", wordTranslit: "dhahab", wordEn: "gold", nonConnector: true },
+  { ar: "ر", name: "raa", sound: "r", hint: "A rolled or tapped \"r\", like in Spanish.", word: "رجل", wordTranslit: "rajul", wordEn: "man", nonConnector: true },
+  { ar: "ز", name: "zaay", sound: "z", hint: "Like the English \"z\".", word: "زهرة", wordTranslit: "zahra", wordEn: "flower", nonConnector: true },
+  { ar: "س", name: "seen", sound: "s", hint: "Like the English \"s\".", word: "سمك", wordTranslit: "samak", wordEn: "fish" },
+  { ar: "ش", name: "sheen", sound: "sh", hint: "Like \"sh\" in \"ship\".", word: "شمس", wordTranslit: "shams", wordEn: "sun" },
+  { ar: "ص", name: "Saad", sound: "S", hint: "A heavy, deep \"s\" — fuller mouth, tongue low.", word: "صديق", wordTranslit: "Sadeeq", wordEn: "friend" },
+  { ar: "ض", name: "Daad", sound: "D", hint: "A heavy \"d\". Arabic is even nicknamed \"the language of the Daad\".", word: "ضوء", wordTranslit: "Daw'", wordEn: "light" },
+  { ar: "ط", name: "Taa", sound: "T", hint: "A heavy, emphatic \"t\".", word: "طير", wordTranslit: "Tayr", wordEn: "bird" },
+  { ar: "ظ", name: "DHaa", sound: "DH", hint: "A heavy \"th\" (as in \"this\"), said with a fuller mouth.", word: "ظل", wordTranslit: "DHill", wordEn: "shade" },
+  { ar: "ع", name: "ayn", sound: "ʿ", hint: "A tight squeeze from deep in the throat — no English match. You'll feel it more than hear it.", word: "عين", wordTranslit: "ʿayn", wordEn: "eye" },
+  { ar: "غ", name: "ghayn", sound: "gh", hint: "A gargled \"gh\", like a French \"r\".", word: "غابة", wordTranslit: "ghaaba", wordEn: "forest" },
+  { ar: "ف", name: "faa", sound: "f", hint: "Like the English \"f\".", word: "فيل", wordTranslit: "feel", wordEn: "elephant" },
+  { ar: "ق", name: "qaaf", sound: "q", hint: "A \"k\" made far back in the throat.", word: "قمر", wordTranslit: "qamar", wordEn: "moon" },
+  { ar: "ك", name: "kaaf", sound: "k", hint: "Like the English \"k\".", word: "كلب", wordTranslit: "kalb", wordEn: "dog" },
+  { ar: "ل", name: "laam", sound: "l", hint: "Like the English \"l\".", word: "ليل", wordTranslit: "layl", wordEn: "night" },
+  { ar: "م", name: "meem", sound: "m", hint: "Like the English \"m\".", word: "ماء", wordTranslit: "maa'", wordEn: "water" },
+  { ar: "ن", name: "noon", sound: "n", hint: "Like the English \"n\".", word: "نجمة", wordTranslit: "najma", wordEn: "star" },
+  { ar: "ه", name: "haa", sound: "h", hint: "A soft \"h\", like in \"hello\".", word: "هواء", wordTranslit: "hawaa'", wordEn: "air" },
+  { ar: "و", name: "waaw", sound: "w / oo", hint: "Like \"w\", or a long \"oo\" as in \"moon\".", word: "ورد", wordTranslit: "ward", wordEn: "roses", nonConnector: true },
+  { ar: "ي", name: "yaa", sound: "y / ee", hint: "Like \"y\", or a long \"ee\" as in \"see\".", word: "يد", wordTranslit: "yad", wordEn: "hand" },
+];
+
+/* spaced repetition (Leitner) — interval per box in ms */
+const HOUR = 3600 * 1000;
+const DAY = 24 * HOUR;
+const INTERVALS = { 1: 4 * HOUR, 2: DAY, 3: 3 * DAY, 4: 7 * DAY, 5: 21 * DAY };
+
+/* storage + Claude calls now live in api.js (Netlify Functions + Blobs).
+   callClaude is imported at the top of the file. */
+
+function parseJSON(text) {
+  let t = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+  const s = t.indexOf("{");
+  const e = t.lastIndexOf("}");
+  if (s >= 0 && e >= 0) t = t.slice(s, e + 1);
+  return JSON.parse(t);
+}
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+const AR_RE = /[\u0600-\u06FF]/;
+function hasArabic(s) {
+  return AR_RE.test(s || "");
+}
+
+/* ---------- sound effects (synthesized, no files) ---------- */
+let _ac = null;
+function audioCtx() {
+  try {
+    if (!_ac) {
+      const C = window.AudioContext || window.webkitAudioContext;
+      if (!C) return null;
+      _ac = new C();
+    }
+    if (_ac.state === "suspended") _ac.resume();
+    return _ac;
+  } catch {
+    return null;
+  }
+}
+function tone(ctx, freq, start, dur, type, peak) {
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = type;
+  o.frequency.value = freq;
+  o.connect(g);
+  g.connect(ctx.destination);
+  const t = ctx.currentTime + start;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(peak, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.start(t);
+  o.stop(t + dur + 0.03);
+}
+function playCorrect() {
+  const ctx = audioCtx();
+  if (!ctx) return;
+  tone(ctx, 880, 0, 0.18, "sine", 0.22); // A5
+  tone(ctx, 1318.5, 0.085, 0.3, "sine", 0.2); // E6
+  tone(ctx, 1760, 0.085, 0.32, "triangle", 0.07); // shimmer
+}
+function playWrong() {
+  const ctx = audioCtx();
+  if (!ctx) return;
+  tone(ctx, 200, 0, 0.2, "sawtooth", 0.14);
+  tone(ctx, 150, 0.07, 0.24, "sawtooth", 0.14);
+}
+
+/* ---------- speech ---------- */
+function pickVoice(prefs) {
+  const vs =
+    (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
+  for (const loc of prefs) {
+    const v = vs.find((v) => v.lang && v.lang.toLowerCase() === loc);
+    if (v) return v;
+  }
+  const arOnly = vs.filter((v) => v.lang && v.lang.toLowerCase().startsWith("ar"));
+  return arOnly[0] || null;
+}
+
+/* =========================================================
+   Small UI atoms
+   ========================================================= */
+function Speaker({ onClick, busy }) {
+  return (
+    <button
+      className="mj-speak"
+      onClick={onClick}
+      aria-label="Hear pronunciation"
+      title="Hear it"
+    >
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <path
+          d="M4 9v6h4l5 4V5L8 9H4z"
+          fill={T.gold}
+          stroke={T.gold}
+          strokeWidth="1.4"
+          strokeLinejoin="round"
+        />
+        {busy ? (
+          <path
+            d="M15 8c1.5 1.2 1.5 6.8 0 8M18 6c2.6 2 2.6 10 0 12"
+            stroke={T.goldSoft}
+            strokeWidth="1.6"
+            strokeLinecap="round"
+          />
+        ) : (
+          <path
+            d="M15.5 9.5c1 .9 1 4.1 0 5"
+            stroke={T.goldSoft}
+            strokeWidth="1.6"
+            strokeLinecap="round"
+          />
+        )}
+      </svg>
+    </button>
+  );
+}
+
+function Chip({ active, children, onClick, tone = "neutral" }) {
+  const palette =
+    tone === "gold"
+      ? { on: T.gold, txtOn: "#1a1205" }
+      : { on: T.teal, txtOn: "#06201b" };
+  return (
+    <button
+      className="mj-chip"
+      onClick={onClick}
+      style={
+        active
+          ? { background: palette.on, color: palette.txtOn, borderColor: "transparent" }
+          : {}
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+/* The signature element: an Arabic line you can hear and peel
+   back layer by layer — script → sound → transliteration → meaning */
+function ArabicLine({
+  arabic,
+  translit,
+  english,
+  prefs,
+  onSpeak,
+  showTranslit,
+  showEnglish,
+  onAdd,
+  added,
+  compact,
+}) {
+  const [t, setT] = useState(showTranslit);
+  const [e, setE] = useState(showEnglish);
+  useEffect(() => setT(showTranslit), [showTranslit]);
+  useEffect(() => setE(showEnglish), [showEnglish]);
+
+  return (
+    <div className="mj-card" style={compact ? { padding: "14px 16px" } : {}}>
+      <div className="mj-card-top">
+        <div className="mj-ar" dir="rtl" lang="ar">
+          {arabic}
+        </div>
+        <Speaker onClick={onSpeak} />
+      </div>
+
+      <div className="mj-reveal">
+        {t ? (
+          <div className="mj-translit">{translit}</div>
+        ) : (
+          <button className="mj-peek" onClick={() => setT(true)}>
+            tap for pronunciation
+          </button>
+        )}
+        {e ? (
+          <div className="mj-en">{english}</div>
+        ) : (
+          <button className="mj-peek" onClick={() => setE(true)}>
+            tap for meaning
+          </button>
+        )}
+      </div>
+
+      {onAdd && (
+        <button
+          className="mj-add"
+          onClick={onAdd}
+          disabled={added}
+          style={added ? { color: T.teal, borderColor: T.tealDim } : {}}
+        >
+          {added ? "✓ in your deck" : "+ save to deck"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================
+   Converse view
+   ========================================================= */
+function Converse({ settings, speak, deck, addCard }) {
+  const [messages, setMessages] = useState([
+    { role: "assistant", ...GREETINGS[settings.dialect] },
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const scroller = useRef(null);
+
+  // reset greeting if dialect changes and only greeting present
+  useEffect(() => {
+    setMessages((m) =>
+      m.length === 1 && m[0].role === "assistant"
+        ? [{ role: "assistant", ...GREETINGS[settings.dialect] }]
+        : m
+    );
+  }, [settings.dialect]);
+
+  useEffect(() => {
+    if (scroller.current)
+      scroller.current.scrollTop = scroller.current.scrollHeight;
+  }, [messages, loading]);
+
+  const system = `You are a warm, patient Arabic conversation tutor. You teach ${settings.dialect}. The learner's level is "${settings.level}". Their goal is "${settings.goal}".
+Rules:
+- Reply at the learner's level. For "Brand new" / "Beginner": very short, simple Arabic (a few words), heavy repetition. Scale richness up with level.
+- Always keep the conversation going by ending with one simple question they can answer.
+- If the learner wrote Arabic with a mistake, give one short encouraging correction naming what to fix. If their message was fine or in English, set correction to null.
+- Respond ONLY with a JSON object. No markdown, no backticks, no text outside the object:
+{"arabic":"your reply in ${settings.dialect}","transliteration":"readable Latin-letter pronunciation","english":"natural English translation","correction":"short note on their Arabic or null","newWords":[{"arabic":"","transliteration":"","english":""}]}
+- newWords: 0–3 key words from YOUR reply worth saving. Use readable transliteration (avoid heavy academic symbols).`;
+
+  async function send() {
+    const text = input.trim();
+    if (!text || loading) return;
+    setError(null);
+    const next = [...messages, { role: "user", text }];
+    setMessages(next);
+    setInput("");
+    setLoading(true);
+    try {
+      const apiMessages = next.map((m) =>
+        m.role === "user"
+          ? { role: "user", content: m.text }
+          : {
+              role: "assistant",
+              content: JSON.stringify({
+                arabic: m.arabic,
+                transliteration: m.translit,
+                english: m.english,
+              }),
+            }
+      );
+      const raw = await callClaude(apiMessages, system);
+      const j = parseJSON(raw);
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          arabic: j.arabic || "",
+          translit: j.transliteration || "",
+          english: j.english || "",
+          correction: j.correction && j.correction !== "null" ? j.correction : null,
+          newWords: Array.isArray(j.newWords) ? j.newWords.slice(0, 3) : [],
+        },
+      ]);
+    } catch (err) {
+      setError("That reply didn't come through. Try sending again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const inDeck = (ar) => deck.some((c) => c.arabic === ar);
+
+  return (
+    <div className="mj-converse">
+      <div className="mj-scroll" ref={scroller}>
+        {messages.map((m, i) =>
+          m.role === "user" ? (
+            <div className="mj-userwrap" key={i}>
+              <div className="mj-userbubble">{m.text}</div>
+            </div>
+          ) : (
+            <div className="mj-turn" key={i}>
+              {m.correction && (
+                <div className="mj-correction">
+                  <span className="mj-corr-label">gentle fix</span>
+                  {m.correction}
+                </div>
+              )}
+              <ArabicLine
+                arabic={m.arabic}
+                translit={m.translit}
+                english={m.english}
+                prefs={VOICE_PREFS[settings.dialect]}
+                onSpeak={() => speak(m.arabic)}
+                showTranslit={settings.showTranslit}
+                showEnglish={settings.showEnglish}
+              />
+              {m.newWords && m.newWords.length > 0 && (
+                <div className="mj-words">
+                  {m.newWords.map((w, k) => (
+                    <button
+                      key={k}
+                      className="mj-wordchip"
+                      disabled={inDeck(w.arabic)}
+                      onClick={() =>
+                        addCard({
+                          arabic: w.arabic,
+                          translit: w.transliteration,
+                          english: w.english,
+                        })
+                      }
+                      style={
+                        inDeck(w.arabic)
+                          ? { color: T.teal, borderColor: T.tealDim }
+                          : {}
+                      }
+                    >
+                      <span dir="rtl" lang="ar" className="mj-wordar">
+                        {w.arabic}
+                      </span>
+                      <span className="mj-worden">
+                        {inDeck(w.arabic) ? "saved" : "+ save"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        )}
+        {loading && (
+          <div className="mj-typing">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        )}
+        {error && <div className="mj-error">{error}</div>}
+      </div>
+
+      <div className="mj-composer">
+        <textarea
+          className="mj-input"
+          rows={1}
+          placeholder="Reply in Arabic or English…"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+        />
+        <button
+          className="mj-send"
+          onClick={send}
+          disabled={loading || !input.trim()}
+          aria-label="Send"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden>
+            <path
+              d="M4 12L20 4l-4 16-4-7-8-1z"
+              fill={T.canvas}
+              stroke={T.canvas}
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   Lessons view
+   ========================================================= */
+function Lessons({ settings, speak, deck, addCard }) {
+  const [topic, setTopic] = useState("");
+  const [custom, setCustom] = useState("");
+  const [lesson, setLesson] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function build(chosen) {
+    const tp = (chosen || custom).trim();
+    if (!tp || loading) return;
+    setTopic(tp);
+    setError(null);
+    setLesson(null);
+    setLoading(true);
+    const system = `You are an Arabic tutor creating a focused micro-lesson in ${settings.dialect} for a "${settings.level}" learner. Topic: "${tp}". Goal context: "${settings.goal}".
+Respond ONLY with a JSON object, no markdown or backticks:
+{"title":"short English title","intro":"one friendly sentence in English","phrases":[{"arabic":"","transliteration":"readable Latin pronunciation","english":"","note":"tiny usage note or null"}],"tip":"one short practical tip in English"}
+Give 5–7 genuinely useful phrases, ordered simplest first. Keep transliteration readable.`;
+    try {
+      const raw = await callClaude(
+        [{ role: "user", content: `Make the lesson on: ${tp}` }],
+        system
+      );
+      const j = parseJSON(raw);
+      setLesson(j);
+    } catch {
+      setError("Couldn't build that lesson. Try again or pick another topic.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const inDeck = (ar) => deck.some((c) => c.arabic === ar);
+
+  return (
+    <div className="mj-lessons">
+      <div className="mj-scroll">
+        <p className="mj-lead">
+          Pick a situation and get a tight set of phrases you can actually use —
+          each one tappable, hearable, and savable.
+        </p>
+        <div className="mj-topics">
+          {LESSON_TOPICS.map((t) => (
+            <Chip key={t} active={topic === t} onClick={() => build(t)} tone="gold">
+              {t}
+            </Chip>
+          ))}
+        </div>
+        <div className="mj-customrow">
+          <input
+            className="mj-input mj-custominput"
+            placeholder="…or type any situation"
+            value={custom}
+            onChange={(e) => setCustom(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") build();
+            }}
+          />
+          <button
+            className="mj-build"
+            onClick={() => build()}
+            disabled={loading || !custom.trim()}
+          >
+            Build
+          </button>
+        </div>
+
+        {loading && (
+          <div className="mj-typing mj-typing-center">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        )}
+        {error && <div className="mj-error">{error}</div>}
+
+        {lesson && (
+          <div className="mj-lesson">
+            <h2 className="mj-lesson-title">{lesson.title}</h2>
+            {lesson.intro && <p className="mj-lesson-intro">{lesson.intro}</p>}
+            {(lesson.phrases || []).map((p, i) => (
+              <div key={i}>
+                <ArabicLine
+                  arabic={p.arabic}
+                  translit={p.transliteration}
+                  english={p.english}
+                  prefs={VOICE_PREFS[settings.dialect]}
+                  onSpeak={() => speak(p.arabic)}
+                  showTranslit={settings.showTranslit}
+                  showEnglish={settings.showEnglish}
+                  onAdd={() =>
+                    addCard({
+                      arabic: p.arabic,
+                      translit: p.transliteration,
+                      english: p.english,
+                    })
+                  }
+                  added={inDeck(p.arabic)}
+                />
+                {p.note && p.note !== "null" && (
+                  <div className="mj-note">{p.note}</div>
+                )}
+              </div>
+            ))}
+            {lesson.tip && (
+              <div className="mj-tip">
+                <span className="mj-tip-label">tip</span>
+                {lesson.tip}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   Deck / review view
+   ========================================================= */
+function Deck({ settings, speak, deck, setDeck }) {
+  const now = Date.now();
+  const due = deck.filter((c) => c.due <= now);
+  const [reviewing, setReviewing] = useState(false);
+  const [idx, setIdx] = useState(0);
+  const [revealed, setRevealed] = useState(false);
+
+  useEffect(() => {
+    if (!reviewing) {
+      setIdx(0);
+      setRevealed(false);
+    }
+  }, [reviewing]);
+
+  function grade(known) {
+    const card = due[idx];
+    setDeck((d) =>
+      d.map((c) => {
+        if (c.id !== card.id) return c;
+        const box = known ? Math.min(c.box + 1, 5) : 1;
+        const dueAt = known ? Date.now() + INTERVALS[box] : Date.now() + 10 * 60 * 1000;
+        return { ...c, box, due: dueAt };
+      })
+    );
+    if (idx + 1 >= due.length) {
+      setReviewing(false);
+    } else {
+      setIdx(idx + 1);
+      setRevealed(false);
+    }
+  }
+
+  function remove(id) {
+    setDeck((d) => d.filter((c) => c.id !== id));
+  }
+
+  function nextDueLabel() {
+    if (deck.length === 0) return null;
+    const soonest = Math.min(...deck.map((c) => c.due));
+    const mins = Math.round((soonest - now) / 60000);
+    if (mins <= 0) return "now";
+    if (mins < 60) return `in ${mins} min`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `in ${hrs} h`;
+    return `in ${Math.round(hrs / 24)} d`;
+  }
+
+  if (reviewing && due.length > 0) {
+    const card = due[idx];
+    return (
+      <div className="mj-review">
+        <div className="mj-review-top">
+          <button className="mj-back" onClick={() => setReviewing(false)}>
+            ← back
+          </button>
+          <span className="mj-progress">
+            {idx + 1} / {due.length}
+          </span>
+        </div>
+        <div className="mj-review-stage">
+          <div className="mj-card mj-review-card">
+            <div className="mj-card-top">
+              <div className="mj-ar mj-ar-big" dir="rtl" lang="ar">
+                {card.arabic}
+              </div>
+              <Speaker onClick={() => speak(card.arabic)} />
+            </div>
+            {revealed ? (
+              <div className="mj-reveal">
+                <div className="mj-translit">{card.translit}</div>
+                <div className="mj-en">{card.english}</div>
+              </div>
+            ) : (
+              <button className="mj-show" onClick={() => setRevealed(true)}>
+                Show answer
+              </button>
+            )}
+          </div>
+        </div>
+        {revealed && (
+          <div className="mj-grade">
+            <button className="mj-again" onClick={() => grade(false)}>
+              Again
+            </button>
+            <button className="mj-got" onClick={() => grade(true)}>
+              Got it
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mj-deck">
+      <div className="mj-scroll">
+        <div className="mj-deckhead">
+          <div>
+            <div className="mj-decknum">{deck.length}</div>
+            <div className="mj-decklabel">
+              {deck.length === 1 ? "word saved" : "words saved"}
+            </div>
+          </div>
+          <button
+            className="mj-startreview"
+            disabled={due.length === 0}
+            onClick={() => setReviewing(true)}
+          >
+            {due.length > 0 ? `Review ${due.length} due` : "Nothing due"}
+          </button>
+        </div>
+
+        {deck.length === 0 && (
+          <div className="mj-empty">
+            Your deck is empty. Save words from a conversation or a lesson and
+            they'll show up here for spaced review.
+          </div>
+        )}
+
+        {deck.length > 0 && due.length === 0 && (
+          <div className="mj-allclear">
+            All caught up. Next review {nextDueLabel()}.
+          </div>
+        )}
+
+        {deck
+          .slice()
+          .sort((a, b) => a.due - b.due)
+          .map((c) => (
+            <div className="mj-deckrow" key={c.id}>
+              <button
+                className="mj-rowspeak"
+                onClick={() => speak(c.arabic)}
+                aria-label="Hear it"
+              >
+                <Speaker onClick={() => speak(c.arabic)} />
+              </button>
+              <div className="mj-rowtext">
+                <div className="mj-ar mj-ar-row" dir="rtl" lang="ar">
+                  {c.arabic}
+                </div>
+                <div className="mj-rowmeta">
+                  {c.translit} · {c.english}
+                </div>
+              </div>
+              <div className="mj-rowright">
+                <span className="mj-box">lvl {c.box}</span>
+                <button
+                  className="mj-del"
+                  onClick={() => remove(c.id)}
+                  aria-label="Remove"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   Settings sheet
+   ========================================================= */
+function Settings({ settings, setSettings, onClose }) {
+  function set(k, v) {
+    setSettings((s) => ({ ...s, [k]: v }));
+  }
+  return (
+    <div className="mj-sheet-wrap" onClick={onClose}>
+      <div className="mj-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="mj-sheet-grab" />
+        <h3 className="mj-sheet-title">Your study</h3>
+
+        <div className="mj-field">
+          <label className="mj-flabel">Dialect</label>
+          <div className="mj-opts">
+            {DIALECTS.map((d) => (
+              <Chip key={d} active={settings.dialect === d} onClick={() => set("dialect", d)}>
+                {d.replace(" (MSA)", "")}
+              </Chip>
+            ))}
+          </div>
+        </div>
+
+        <div className="mj-field">
+          <label className="mj-flabel">Level</label>
+          <div className="mj-opts">
+            {LEVELS.map((l) => (
+              <Chip key={l} active={settings.level === l} onClick={() => set("level", l)}>
+                {l}
+              </Chip>
+            ))}
+          </div>
+        </div>
+
+        <div className="mj-field">
+          <label className="mj-flabel">Focus</label>
+          <div className="mj-opts">
+            {GOALS.map((g) => (
+              <Chip key={g} active={settings.goal === g} onClick={() => set("goal", g)}>
+                {g}
+              </Chip>
+            ))}
+          </div>
+        </div>
+
+        <div className="mj-field">
+          <label className="mj-flabel">Show by default</label>
+          <div className="mj-opts">
+            <Chip
+              active={settings.showTranslit}
+              tone="gold"
+              onClick={() => set("showTranslit", !settings.showTranslit)}
+            >
+              Pronunciation
+            </Chip>
+            <Chip
+              active={settings.showEnglish}
+              tone="gold"
+              onClick={() => set("showEnglish", !settings.showEnglish)}
+            >
+              Meaning
+            </Chip>
+          </div>
+          <p className="mj-hint">
+            Turn these off to test your recall — you can still tap any line to
+            peek.
+          </p>
+        </div>
+
+        <div className="mj-field">
+          <label className="mj-flabel">Quiz sound</label>
+          <div className="mj-opts">
+            <Chip
+              active={settings.sfx !== false}
+              tone="gold"
+              onClick={() => set("sfx", settings.sfx === false)}
+            >
+              Sound effects {settings.sfx !== false ? "on" : "off"}
+            </Chip>
+          </div>
+        </div>
+
+        <button className="mj-done" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   Letters / alphabet view
+   ========================================================= */
+function Letters({ settings, speak, learned, setLearned, deck, addCard }) {
+  const [sel, setSel] = useState(null);
+  const ZWJ = "\u200D";
+  const count = learned.length;
+
+  function toggleLearned(name) {
+    setLearned((L) =>
+      L.includes(name) ? L.filter((x) => x !== name) : [...L, name]
+    );
+  }
+
+  if (sel !== null) {
+    const l = LETTERS[sel];
+    const forms = [
+      ["On its own", l.ar],
+      ["Start", l.ar + ZWJ],
+      ["Middle", ZWJ + l.ar + ZWJ],
+      ["End", ZWJ + l.ar],
+    ];
+    const isLearned = learned.includes(l.name);
+    const inDeck = deck.some((c) => c.arabic === l.word);
+    return (
+      <div className="mj-letters">
+        <div className="mj-scroll">
+          <div className="mj-ltr-detailtop">
+            <button className="mj-back" onClick={() => setSel(null)}>
+              ← all letters
+            </button>
+            <span className="mj-progress">{sel + 1} / 28</span>
+          </div>
+
+          <div className="mj-card mj-ltr-hero">
+            <div className="mj-card-top">
+              <div className="mj-ar mj-ltr-big" dir="rtl" lang="ar">
+                {l.ar}
+              </div>
+              <Speaker onClick={() => speak(l.ar)} />
+            </div>
+            <div className="mj-ltr-name">{l.name}</div>
+            <div className="mj-ltr-sound">
+              sounds like <b>{l.sound}</b>
+            </div>
+            <div className="mj-ltr-hint">{l.hint}</div>
+          </div>
+
+          <div className="mj-formlabel">How it changes shape</div>
+          <div className="mj-forms">
+            {forms.map(([lab, g]) => (
+              <div className="mj-form" key={lab}>
+                <div className="mj-ar mj-formglyph" dir="rtl" lang="ar">
+                  {g}
+                </div>
+                <div className="mj-formcap">{lab}</div>
+              </div>
+            ))}
+          </div>
+          {l.nonConnector && (
+            <div className="mj-note">
+              One of six letters that never joins to the letter after it — so a
+              small gap appears before the next one.
+            </div>
+          )}
+
+          <div className="mj-formlabel">In a word</div>
+          <ArabicLine
+            arabic={l.word}
+            translit={l.wordTranslit}
+            english={l.wordEn}
+            prefs={VOICE_PREFS[settings.dialect]}
+            onSpeak={() => speak(l.word)}
+            showTranslit={true}
+            showEnglish={true}
+            onAdd={() =>
+              addCard({
+                arabic: l.word,
+                translit: l.wordTranslit,
+                english: l.wordEn,
+              })
+            }
+            added={inDeck}
+          />
+
+          <div className="mj-ltr-nav">
+            <button
+              className="mj-navbtn"
+              disabled={sel === 0}
+              onClick={() => setSel(sel - 1)}
+            >
+              ‹ Prev
+            </button>
+            <button
+              className="mj-learnbtn"
+              onClick={() => toggleLearned(l.name)}
+              style={
+                isLearned
+                  ? { background: T.teal, color: "#06201b", borderColor: "transparent" }
+                  : {}
+              }
+            >
+              {isLearned ? "✓ Learned" : "Mark as learned"}
+            </button>
+            <button
+              className="mj-navbtn"
+              disabled={sel === 27}
+              onClick={() => setSel(sel + 1)}
+            >
+              Next ›
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mj-letters">
+      <div className="mj-scroll">
+        <p className="mj-lead">
+          The Arabic alphabet has 28 letters. Three things to know before you
+          start:
+        </p>
+        <div className="mj-truths">
+          <div className="mj-truth">
+            <span className="mj-truthnum">→</span>You read from right to left.
+          </div>
+          <div className="mj-truth">
+            <span className="mj-truthnum">∞</span>Letters join up, and change
+            shape depending on where they sit in a word.
+          </div>
+          <div className="mj-truth">
+            <span className="mj-truthnum">◌</span>Short vowels are little marks
+            added above or below — you'll meet those soon.
+          </div>
+        </div>
+        <div className="mj-ltr-progress">
+          <span>{count} / 28 learned</span>
+          <div className="mj-bar">
+            <div
+              className="mj-barfill"
+              style={{ width: (count / 28) * 100 + "%" }}
+            />
+          </div>
+        </div>
+        <div className="mj-grid">
+          {LETTERS.map((l, i) => (
+            <button
+              key={l.name}
+              className="mj-gridcell"
+              onClick={() => setSel(i)}
+            >
+              {learned.includes(l.name) && <span className="mj-dot" />}
+              <span className="mj-ar mj-gridglyph" dir="rtl" lang="ar">
+                {l.ar}
+              </span>
+              <span className="mj-gridname">{l.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* shared quiz helpers */
+function makeLettersQuestions(pool, n) {
+  const chosen = shuffle(pool).slice(0, Math.min(n, pool.length));
+  return chosen.map((l) => {
+    const distract = shuffle(LETTERS.filter((x) => x.name !== l.name)).slice(0, 3);
+    const opts = shuffle([l, ...distract]);
+    const answer = opts.findIndex((x) => x.name === l.name);
+    if (Math.random() < 0.5) {
+      return {
+        prompt: "Which letter is this?",
+        display: { glyph: l.ar },
+        hearable: l.ar,
+        options: opts.map((x) => ({ text: x.name + "  ·  " + x.sound })),
+        answer,
+      };
+    }
+    return {
+      prompt: 'Which letter makes the "' + l.sound + '" sound? (' + l.name + ")",
+      display: null,
+      hearable: null,
+      options: opts.map((x) => ({ text: x.ar, arabic: true })),
+      answer,
+    };
+  });
+}
+function normalizeQuiz(arr) {
+  return (arr || [])
+    .slice(0, 8)
+    .map((q) => ({
+      prompt: q.prompt,
+      display: q.arabic && q.arabic !== "null" ? { arabic: q.arabic } : null,
+      hearable: q.arabic && q.arabic !== "null" ? q.arabic : null,
+      options: (q.options || []).map((o) => ({
+        text: String(o),
+        arabic: hasArabic(String(o)),
+      })),
+      answer: typeof q.answer === "number" ? q.answer : 0,
+      explain: q.explain && q.explain !== "null" ? q.explain : null,
+    }))
+    .filter((q) => q.options.length >= 2 && q.prompt);
+}
+function lettersByNames(names) {
+  return names.map((n) => LETTERS.find((l) => l.name === n)).filter(Boolean);
+}
+
+/* shared quiz runner — one question at a time, with sparkle + sound feedback */
+function QuizRunner({ questions, sfxOn, speak, onDone }) {
+  const [idx, setIdx] = useState(0);
+  const [picked, setPicked] = useState(null);
+  const [cheer, setCheer] = useState(false);
+  const scoreRef = useRef(0);
+  const cheerTimer = useRef(null);
+  const q = questions[idx];
+
+  useEffect(() => () => clearTimeout(cheerTimer.current), []);
+
+  function choose(i) {
+    if (picked !== null) return;
+    setPicked(i);
+    const correct = i === q.answer;
+    if (correct) {
+      scoreRef.current += 1;
+      setCheer(true);
+      clearTimeout(cheerTimer.current);
+      cheerTimer.current = setTimeout(() => setCheer(false), 1600);
+    }
+    if (sfxOn) (correct ? playCorrect : playWrong)();
+  }
+  function next() {
+    setCheer(false);
+    if (idx + 1 >= questions.length) onDone(scoreRef.current, questions.length);
+    else {
+      setIdx(idx + 1);
+      setPicked(null);
+    }
+  }
+
+  return (
+    <>
+      {cheer && (
+        <div className="mj-cheer" aria-hidden="true">
+          <div className="mj-cheer-glow" />
+          <img src="/cheer.png" alt="" className="mj-cheer-img" />
+          <span className="mj-cheer-thumb">👍</span>
+        </div>
+      )}
+      <div className="mj-runprogress">
+        <div className="mj-runbar">
+          <div
+            className="mj-runfill"
+            style={{
+              width:
+                ((idx + (picked !== null ? 1 : 0)) / questions.length) * 100 + "%",
+            }}
+          />
+        </div>
+        <span className="mj-runcount">
+          {idx + 1} / {questions.length}
+        </span>
+      </div>
+
+      <div className="mj-qprompt">{q.prompt}</div>
+
+      {q.display && (
+        <div className="mj-card mj-qdisplay">
+          <div className="mj-card-top">
+            <div
+              className={"mj-ar " + (q.display.glyph ? "mj-qglyph" : "mj-qphrase")}
+              dir="rtl"
+              lang="ar"
+            >
+              {q.display.glyph || q.display.arabic}
+            </div>
+            {q.hearable && <Speaker onClick={() => speak(q.hearable)} />}
+          </div>
+        </div>
+      )}
+
+      <div className="mj-options">
+        {q.options.map((o, i) => {
+          let cls = "mj-option";
+          if (picked !== null) {
+            if (i === q.answer) cls += " mj-opt-correct";
+            else if (i === picked) cls += " mj-opt-wrong";
+            else cls += " mj-opt-dim";
+          }
+          return (
+            <button
+              key={i}
+              className={cls}
+              disabled={picked !== null}
+              onClick={() => choose(i)}
+            >
+              <span
+                className={o.arabic ? "mj-ar mj-optar" : "mj-opttext"}
+                dir={o.arabic ? "rtl" : "ltr"}
+                lang={o.arabic ? "ar" : undefined}
+              >
+                {o.text}
+              </span>
+              {picked !== null && i === q.answer && (
+                <span className="mj-markwrap">
+                  <span className="mj-spark-burst" aria-hidden="true">
+                    {[0, 1, 2, 3, 4, 5].map((k) => (
+                      <span
+                        key={k}
+                        className="mj-sparkray"
+                        style={{ transform: `rotate(${k * 60}deg)` }}
+                      >
+                        <span className="mj-spark" />
+                      </span>
+                    ))}
+                  </span>
+                  <span className="mj-mark mj-mark-pop">✓</span>
+                </span>
+              )}
+              {picked !== null && i === picked && i !== q.answer && (
+                <span className="mj-mark mj-markx mj-mark-pop">✕</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {picked !== null && (
+        <div className="mj-qfoot">
+          {q.explain && <div className="mj-explain">{q.explain}</div>}
+          <button className="mj-next" onClick={next}>
+            {idx + 1 >= questions.length ? "Finish" : "Next"}
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* =========================================================
+   Quiz view — letters (built locally) or a lesson topic (Claude)
+   ========================================================= */
+function Quiz({ settings, speak, learned, onQuizDone }) {
+  const [stage, setStage] = useState("setup"); // setup | active | done
+  const [questions, setQuestions] = useState([]);
+  const [idx, setIdx] = useState(0);
+  const [picked, setPicked] = useState(null);
+  const [score, setScore] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [custom, setCustom] = useState("");
+
+  const learnedLetters = LETTERS.filter((l) => learned.includes(l.name));
+
+  function start(qs) {
+    setQuestions(qs);
+    setIdx(0);
+    setPicked(null);
+    setScore(0);
+    setStage("active");
+  }
+
+  function buildLettersQuiz(useLearnedOnly) {
+    const pool =
+      useLearnedOnly && learnedLetters.length >= 3 ? learnedLetters : LETTERS;
+    start(makeLettersQuestions(pool, Math.min(8, pool.length)));
+  }
+
+  async function buildLessonQuiz(topic) {
+    const tp = (topic || custom).trim();
+    if (!tp || loading) return;
+    setError(null);
+    setLoading(true);
+    const system = `You are an Arabic tutor writing a short multiple-choice quiz in ${settings.dialect} for a "${settings.level}" learner on the topic "${tp}". Goal context: "${settings.goal}".
+Respond ONLY with a JSON object, no markdown or backticks:
+{"questions":[{"prompt":"the question in English","arabic":"an Arabic word or phrase to show, or null","options":["option 1","option 2","option 3","option 4"],"answer":0,"explain":"one short sentence"}]}
+Write 6 questions, four options each. Mix two styles: (a) show an Arabic word in "arabic" and ask its English meaning, with the options in English; (b) ask which Arabic word matches an English term, with the options written in Arabic script. "answer" is the 0-based index of the correct option. Keep it level-appropriate.`;
+    try {
+      const raw = await callClaude(
+        [{ role: "user", content: "Make the quiz on: " + tp }],
+        system
+      );
+      const j = parseJSON(raw);
+      const qs = normalizeQuiz(j.questions);
+      if (qs.length === 0) throw new Error("empty");
+      start(qs);
+    } catch {
+      setError("Couldn't build that quiz. Try again or pick another topic.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /* ---- setup ---- */
+  if (stage === "setup") {
+    return (
+      <div className="mj-quiz">
+        <div className="mj-scroll">
+          <p className="mj-lead">
+            Test yourself — multiple choice, instant feedback. Pick what to be
+            quizzed on.
+          </p>
+
+          <div className="mj-sectlabel">Letters</div>
+          <button className="mj-bigbtn" onClick={() => buildLettersQuiz(false)}>
+            <span className="mj-bigbtn-ar" dir="rtl" lang="ar">
+              أ ب ت
+            </span>
+            <span className="mj-bigbtn-text">
+              <b>Quiz all 28 letters</b>
+              <small>Recognize the shape and the sound</small>
+            </span>
+          </button>
+          {learnedLetters.length >= 3 && (
+            <button className="mj-bigbtn" onClick={() => buildLettersQuiz(true)}>
+              <span className="mj-bigbtn-ar mj-bigbtn-teal">✓</span>
+              <span className="mj-bigbtn-text">
+                <b>Just my learned letters</b>
+                <small>{learnedLetters.length} so far</small>
+              </span>
+            </button>
+          )}
+
+          <div className="mj-sectlabel" style={{ marginTop: 26 }}>
+            From a lesson
+          </div>
+          <div className="mj-topics">
+            {LESSON_TOPICS.map((t) => (
+              <Chip key={t} tone="gold" onClick={() => buildLessonQuiz(t)}>
+                {t}
+              </Chip>
+            ))}
+          </div>
+          <div className="mj-customrow">
+            <input
+              className="mj-input mj-custominput"
+              placeholder="…or quiz me on any topic"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") buildLessonQuiz();
+              }}
+            />
+            <button
+              className="mj-build"
+              onClick={() => buildLessonQuiz()}
+              disabled={loading || !custom.trim()}
+            >
+              Build
+            </button>
+          </div>
+
+          {loading && (
+            <div className="mj-typing mj-typing-center">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+          )}
+          {error && <div className="mj-error">{error}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- results ---- */
+  if (stage === "done") {
+    const ratio = questions.length ? score / questions.length : 0;
+    const msg =
+      ratio >= 0.9
+        ? "Excellent — that's really sticking."
+        : ratio >= 0.6
+        ? "Solid. A few worth another look."
+        : "Early days — repetition is how it locks in.";
+    return (
+      <div className="mj-quiz">
+        <div className="mj-scroll mj-resultwrap">
+          <div className="mj-result">
+            <div className="mj-resultscore">
+              {score}
+              <span className="mj-resultslash"> / {questions.length}</span>
+            </div>
+            <div className="mj-resultmsg">{msg}</div>
+            <button className="mj-startreview" onClick={() => setStage("setup")}>
+              New quiz
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- active ---- */
+  return (
+    <div className="mj-quiz">
+      <div className="mj-scroll">
+        <div className="mj-ltr-detailtop">
+          <button className="mj-back" onClick={() => setStage("setup")}>
+            ← end quiz
+          </button>
+        </div>
+        <QuizRunner
+          questions={questions}
+          sfxOn={settings.sfx !== false}
+          speak={speak}
+          onDone={(s, t) => {
+            setScore(s);
+            setStage("done");
+            if (onQuizDone) onQuizDone(s, t);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   Curriculum — units → steps (path nodes) → multiple lessons
+   Each step holds several short lessons that reinforce the same
+   material (e.g. part 1, part 2, then a review).
+   ========================================================= */
+const UNITS = [
+  {
+    id: "u1",
+    title: "The Alphabet",
+    subtitle: "Letters and their sounds",
+    accent: "#E0A33E",
+    steps: [
+      { id: "u1s1", title: "First letters", kind: "letters", letters: ["alif", "baa", "taa", "thaa"] },
+      { id: "u1s2", title: "From the throat", kind: "letters", letters: ["jeem", "Haa", "khaa"] },
+      { id: "u1s3", title: "The non-joiners", kind: "letters", letters: ["daal", "dhaal", "raa", "zaay"] },
+      { id: "u1s4", title: "S sounds", kind: "letters", letters: ["seen", "sheen", "Saad", "Daad"] },
+      { id: "u1s5", title: "Heavy & deep", kind: "letters", letters: ["Taa", "DHaa", "ayn", "ghayn"] },
+      { id: "u1s6", title: "Familiar shapes", kind: "letters", letters: ["faa", "qaaf", "kaaf", "laam"] },
+      { id: "u1s7", title: "Last letters", kind: "letters", letters: ["meem", "noon", "haa", "waaw", "yaa"] },
+    ],
+  },
+  {
+    id: "u2",
+    title: "First Words",
+    subtitle: "Your starter vocabulary",
+    accent: "#3FB89C",
+    level: "Brand new",
+    steps: [
+      { id: "u2s1", title: "Everyday objects", kind: "topic", icon: "word", topic: "common everyday objects (house, door, water, book, key)" },
+      { id: "u2s2", title: "Colors", kind: "topic", icon: "word", topic: "basic colors" },
+      { id: "u2s3", title: "Numbers 1-10", kind: "topic", icon: "word", topic: "the numbers one to ten" },
+      { id: "u2s4", title: "Food & drink", kind: "topic", icon: "word", topic: "simple food and drink words (bread, water, tea, coffee, fruit)" },
+    ],
+  },
+  {
+    id: "u3",
+    title: "Greetings & People",
+    subtitle: "Meeting and talking to people",
+    accent: "#A992D6",
+    level: "Beginner",
+    steps: [
+      { id: "u3s1", title: "Greetings", kind: "topic", icon: "chat", topic: "greetings and goodbyes" },
+      { id: "u3s2", title: "Introducing yourself", kind: "topic", icon: "chat", topic: "introducing yourself - your name and where you are from" },
+      { id: "u3s3", title: "Family", kind: "topic", icon: "chat", topic: "family members" },
+      { id: "u3s4", title: "Please & thank you", kind: "topic", icon: "chat", topic: "polite words and phrases (please, thank you, excuse me, sorry)" },
+    ],
+  },
+  {
+    id: "u4",
+    title: "Getting Around",
+    subtitle: "Out in the world",
+    accent: "#D98C5F",
+    level: "Beginner",
+    steps: [
+      { id: "u4s1", title: "Directions", kind: "topic", icon: "map", topic: "asking for and giving simple directions" },
+      { id: "u4s2", title: "At the café", kind: "topic", icon: "map", topic: "ordering food and drink at a café" },
+      { id: "u4s3", title: "Shopping", kind: "topic", icon: "map", topic: "simple shopping phrases and asking prices" },
+      { id: "u4s4", title: "Time & days", kind: "topic", icon: "map", topic: "telling the time and the days of the week" },
+    ],
+  },
+  {
+    id: "u5",
+    title: "Simple Sentences",
+    subtitle: "Putting words together",
+    accent: "#6FA8C7",
+    level: "Intermediate",
+    steps: [
+      { id: "u5s1", title: "This & that", kind: "topic", icon: "grammar", topic: "using this and that with nouns (haadha, haadhihi)" },
+      { id: "u5s2", title: "I want / I have", kind: "topic", icon: "grammar", topic: "saying I want and I have with simple objects" },
+      { id: "u5s3", title: "Asking questions", kind: "topic", icon: "grammar", topic: "forming simple questions - what, where, how much" },
+      { id: "u5s4", title: "Describing things", kind: "topic", icon: "grammar", topic: "using simple adjectives to describe nouns" },
+    ],
+  },
+];
+
+function expandStep(step, unit) {
+  const out = [];
+  if (step.kind === "letters") {
+    const chunks = [];
+    for (let i = 0; i < step.letters.length; i += 2) chunks.push(step.letters.slice(i, i + 2));
+    chunks.forEach((ch, i) =>
+      out.push({ id: step.id + "-l" + (i + 1), kind: "letters", letters: ch, level: unit.level, title: "Part " + (i + 1) })
+    );
+    out.push({ id: step.id + "-r", kind: "letters", mode: "quiz", letters: step.letters, level: unit.level, title: "Review" });
+  } else {
+    out.push({ id: step.id + "-l1", kind: "topic", topic: step.topic, icon: step.icon, level: unit.level, title: "Basics", focus: "the core, most essential words and short phrases" });
+    out.push({ id: step.id + "-l2", kind: "topic", topic: step.topic, icon: step.icon, level: unit.level, title: "More", focus: "a few more words plus short everyday phrases that use them; build on the basics and avoid repeating the same examples" });
+    out.push({ id: step.id + "-r", kind: "topic", mode: "quiz", topic: step.topic, icon: step.icon, level: unit.level, title: "Review", focus: "a mixed review quiz covering the whole topic" });
+  }
+  return out;
+}
+
+const CURRICULUM = UNITS.map((u) => ({
+  ...u,
+  steps: u.steps.map((s) => ({ ...s, lessons: expandStep(s, u) })),
+}));
+
+const ALL_STEPS = [];
+CURRICULUM.forEach((u) => u.steps.forEach((s) => ALL_STEPS.push(s)));
+const TOTAL_STEPS = ALL_STEPS.length;
+
+function stepDoneCount(step, doneSet) {
+  return step.lessons.filter((l) => doneSet.has(l.id)).length;
+}
+function stepComplete(step, doneSet) {
+  return step.lessons.every((l) => doneSet.has(l.id));
+}
+
+function IconFor({ name, size = 26 }) {
+  const p = {
+    width: size, height: size, viewBox: "0 0 24 24", fill: "none",
+    stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round",
+  };
+  if (name === "word") return (<svg {...p}><path d="M5 4h10l4 4v12H5z" /><path d="M9 9h5M9 13h6M9 17h4" /></svg>);
+  if (name === "chat") return (<svg {...p}><path d="M4 5h16v10H10l-4 3v-3H4z" /></svg>);
+  if (name === "map") return (<svg {...p}><path d="M12 21s7-6.4 7-11a7 7 0 1 0-14 0c0 4.6 7 11 7 11z" /><circle cx="12" cy="10" r="2.3" /></svg>);
+  if (name === "grammar") return (<svg {...p}><path d="M4 18 8 6l4 12M5.5 14h5" /><path d="M15 8h5M15 12h5M15 16h5" /></svg>);
+  if (name === "star") return (<svg {...p}><path d="M12 4l2.3 4.7 5.2.8-3.8 3.6.9 5.1L12 16.6l-4.6 2.4.9-5.1L4.5 9.5l5.2-.8z" /></svg>);
+  return (<svg {...p}><circle cx="12" cy="12" r="7" /></svg>);
+}
+function IconCheck({ size = 28 }) {
+  return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7" /></svg>);
+}
+function IconLock({ size = 22 }) {
+  return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>);
+}
+
+/* The lesson player — teach, then practice, then mark complete */
+function LessonPlayer({ node, settings, speak, onClose, onComplete, onQuizDone }) {
+  const [phase, setPhase] = useState("loading"); // loading | teach | quiz | result
+  const [error, setError] = useState(null);
+  const [phrases, setPhrases] = useState([]);
+  const [letters, setLetters] = useState([]);
+  const [questions, setQuestions] = useState([]);
+  const [result, setResult] = useState(null);
+  const [runKey, setRunKey] = useState(0);
+
+  const load = useCallback(async () => {
+    setError(null);
+    if (node.kind === "letters") {
+      const pool = lettersByNames(node.letters);
+      setLetters(pool);
+      setQuestions(makeLettersQuestions(pool, Math.min(8, pool.length + 2)));
+      setPhase(node.mode === "quiz" ? "quiz" : "teach");
+      return;
+    }
+    setPhase("loading");
+    const lvl = node.level || settings.level;
+    const quizOnly = node.mode === "quiz";
+    if (quizOnly) {
+      const system = `You are an Arabic tutor. Write a short multiple-choice review quiz in ${settings.dialect} for a "${lvl}" learner on the topic "${node.topic}".${node.focus ? " " + node.focus + "." : ""}
+Respond ONLY with a JSON object, no markdown or backticks:
+{"quiz":[{"prompt":"the question in English","arabic":"Arabic to show or null","options":["","","",""],"answer":0,"explain":"one short sentence"}]}
+Write 5 questions, four options each. Mix Arabic→meaning (English options) and meaning→Arabic (options written in Arabic script). "answer" is the 0-based index of the correct option. Keep it level-appropriate.`;
+      try {
+        const raw = await callClaude(
+          [{ role: "user", content: "Make the review quiz on: " + node.topic }],
+          system
+        );
+        const qz = normalizeQuiz(parseJSON(raw).quiz);
+        if (qz.length === 0) throw new Error("empty");
+        setQuestions(qz);
+        setPhase("quiz");
+      } catch {
+        setError("Couldn't load this lesson. Check your connection and try again.");
+      }
+      return;
+    }
+    const system = `You are an Arabic tutor. Create a short, beginner-friendly micro-lesson AND a matching quiz in ${settings.dialect} for a "${lvl}" learner. Topic: "${node.topic}".${node.focus ? " Focus: " + node.focus + "." : ""}
+Respond ONLY with a JSON object, no markdown or backticks:
+{"phrases":[{"arabic":"","transliteration":"readable Latin pronunciation","english":"","note":"tiny note or null"}],"quiz":[{"prompt":"the question in English","arabic":"Arabic to show or null","options":["","","",""],"answer":0,"explain":"one short sentence"}]}
+Give 4–6 teaching phrases, simplest first. Then 4–5 multiple-choice questions that test exactly those phrases. Mix Arabic→meaning (English options) and meaning→Arabic (options written in Arabic script). "answer" is the 0-based index of the correct option. Keep it level-appropriate.`;
+    try {
+      const raw = await callClaude(
+        [{ role: "user", content: "Create the lesson on: " + node.topic }],
+        system
+      );
+      const j = parseJSON(raw);
+      const ph = (j.phrases || [])
+        .map((p) => ({
+          arabic: p.arabic,
+          translit: p.transliteration,
+          english: p.english,
+          note: p.note && p.note !== "null" ? p.note : null,
+        }))
+        .filter((p) => p.arabic);
+      const qz = normalizeQuiz(j.quiz);
+      if (ph.length === 0 || qz.length === 0) throw new Error("empty");
+      setPhrases(ph);
+      setQuestions(qz);
+      setPhase("teach");
+    } catch {
+      setError("Couldn't load this lesson. Check your connection and try again.");
+    }
+  }, [node, settings.dialect, settings.level]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  function finishQuiz(s, t) {
+    setResult({ s, t });
+    setPhase("result");
+    if (onQuizDone) onQuizDone(s, t);
+    if (s / t >= 0.6) onComplete(node.id);
+  }
+  function retry() {
+    if (node.kind === "letters") {
+      setQuestions(
+        makeLettersQuestions(lettersByNames(node.letters), Math.min(8, node.letters.length + 2))
+      );
+    }
+    setResult(null);
+    setRunKey((k) => k + 1);
+    setPhase("quiz");
+  }
+
+  const passed = result && result.s / result.t >= 0.6;
+
+  return (
+    <div className="mj-player">
+      <div className="mj-player-head">
+        <button className="mj-player-close" onClick={onClose} aria-label="Close lesson">
+          ✕
+        </button>
+        <div className="mj-player-title">{node.title}</div>
+        <span style={{ width: 30 }} />
+      </div>
+      <div className="mj-scroll mj-player-body">
+        {error ? (
+          <div>
+            <div className="mj-error">{error}</div>
+            <button className="mj-next" style={{ marginTop: 12 }} onClick={load}>
+              Try again
+            </button>
+          </div>
+        ) : phase === "loading" ? (
+          <div className="mj-typing mj-typing-center">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        ) : phase === "teach" ? (
+          <div>
+            <p className="mj-lead">
+              {node.kind === "letters"
+                ? "Meet these letters, then practice."
+                : "Learn these, then practice."}
+            </p>
+            {node.kind === "letters"
+              ? letters.map((l) => (
+                  <div className="mj-card mj-teach-letter" key={l.name}>
+                    <div className="mj-ar mj-teach-glyph" dir="rtl" lang="ar">
+                      {l.ar}
+                    </div>
+                    <div className="mj-teach-info">
+                      <div className="mj-teach-name">{l.name}</div>
+                      <div className="mj-teach-sound">
+                        sounds like <b>{l.sound}</b>
+                      </div>
+                    </div>
+                    <Speaker onClick={() => speak(l.ar)} />
+                  </div>
+                ))
+              : phrases.map((p, i) => (
+                  <ArabicLine
+                    key={i}
+                    arabic={p.arabic}
+                    translit={p.translit}
+                    english={p.english}
+                    prefs={VOICE_PREFS[settings.dialect]}
+                    onSpeak={() => speak(p.arabic)}
+                    showTranslit={true}
+                    showEnglish={true}
+                  />
+                ))}
+            <button
+              className="mj-next"
+              style={{ marginTop: 8 }}
+              onClick={() => setPhase("quiz")}
+            >
+              Practice →
+            </button>
+          </div>
+        ) : phase === "quiz" ? (
+          <QuizRunner
+            key={runKey}
+            questions={questions}
+            sfxOn={settings.sfx !== false}
+            speak={speak}
+            onDone={finishQuiz}
+          />
+        ) : (
+          result && (
+            <div className="mj-result">
+              <div className="mj-resultscore">
+                {result.s}
+                <span className="mj-resultslash"> / {result.t}</span>
+              </div>
+              <div className="mj-resultmsg">
+                {passed
+                  ? "Lesson complete — nicely done."
+                  : "So close. One more pass and it's yours."}
+              </div>
+              {passed ? (
+                <button className="mj-startreview" onClick={onClose}>
+                  Continue
+                </button>
+              ) : (
+                <div className="mj-result-btns">
+                  <button className="mj-navbtn" onClick={onClose}>
+                    Leave
+                  </button>
+                  <button className="mj-startreview" onClick={retry}>
+                    Try again
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* The path — a vertical, unlockable journey of units and lessons */
+function Path({ done, onOpenStep }) {
+  const doneSet = new Set(done);
+  const completed = ALL_STEPS.filter((s) => stepComplete(s, doneSet)).length;
+  let currentId = null;
+  for (const s of ALL_STEPS) {
+    if (!stepComplete(s, doneSet)) {
+      currentId = s.id;
+      break;
+    }
+  }
+  const offsets = [0, 44, 62, 44, 0, -44, -62, -44];
+  let nodeIdx = -1;
+
+  function statusOf(step) {
+    if (stepComplete(step, doneSet)) return "done";
+    if (step.id === currentId) return "current";
+    return "locked";
+  }
+
+  return (
+    <div className="mj-pathview">
+      <div className="mj-scroll">
+        <div className="mj-pathhead">
+          <div className="mj-pathtitle">Your path</div>
+          <div className="mj-pathsub">
+            {completed} of {TOTAL_STEPS} steps complete
+          </div>
+          <div className="mj-bar">
+            <div className="mj-barfill" style={{ width: (completed / TOTAL_STEPS) * 100 + "%" }} />
+          </div>
+        </div>
+
+        <div className="mj-pathwrap">
+          <div className="mj-spine" />
+          {CURRICULUM.map((u, ui) => (
+            <div className="mj-unit-block" key={u.id}>
+              <div className="mj-unit" style={{ background: u.accent }}>
+                <div className="mj-unit-eyebrow">Unit {ui + 1}</div>
+                <div className="mj-unit-title">{u.title}</div>
+                <div className="mj-unit-sub">{u.subtitle}</div>
+              </div>
+              {u.steps.map((step) => {
+                nodeIdx += 1;
+                const status = statusOf(step);
+                const off = offsets[nodeIdx % offsets.length];
+                const doneN = stepDoneCount(step, doneSet);
+                const frac = doneN / step.lessons.length;
+                const accentStyle =
+                  status === "done" || status === "current"
+                    ? { background: u.accent, borderColor: u.accent }
+                    : undefined;
+                const R = 35;
+                const C = 2 * Math.PI * R;
+                return (
+                  <div className="mj-noderow" key={step.id}>
+                    <div className="mj-nodewrap" style={{ transform: `translateX(${off}px)` }}>
+                      <button
+                        className={"mj-node mj-node-" + status}
+                        style={accentStyle}
+                        disabled={status === "locked"}
+                        onClick={() => onOpenStep(step, u)}
+                      >
+                        {status === "current" && (
+                          <>
+                            <span className="mj-node-pulse" style={{ borderColor: u.accent }} />
+                            {doneN > 0 && (
+                              <svg className="mj-node-ring" viewBox="0 0 76 76">
+                                <circle cx="38" cy="38" r={R} fill="none" stroke={u.accent} strokeOpacity="0.25" strokeWidth="4" />
+                                <circle
+                                  cx="38" cy="38" r={R} fill="none" stroke={u.accent} strokeWidth="4" strokeLinecap="round"
+                                  strokeDasharray={C} strokeDashoffset={C * (1 - frac)}
+                                  transform="rotate(-90 38 38)"
+                                />
+                              </svg>
+                            )}
+                          </>
+                        )}
+                        {status === "done" ? (
+                          <IconCheck />
+                        ) : status === "locked" ? (
+                          <IconLock />
+                        ) : step.kind === "letters" ? (
+                          <span className="mj-node-glyph" dir="rtl" lang="ar">
+                            {(lettersByNames(step.letters)[0] || {}).ar}
+                          </span>
+                        ) : (
+                          <IconFor name={step.icon || "word"} />
+                        )}
+                      </button>
+                      {status === "current" && (
+                        <span className="mj-node-flag">
+                          {doneN > 0 ? `${doneN}/${step.lessons.length}` : "START"}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      className="mj-node-caption"
+                      style={status === "locked" ? { color: T.muted } : undefined}
+                    >
+                      {step.title}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          <div className="mj-path-end">Keep climbing — more is added as you go.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Bottom sheet listing the lessons inside a step */
+function StepSheet({ step, unit, done, onPlay, onClose }) {
+  const doneSet = new Set(done);
+  const nextIdx = step.lessons.findIndex((l) => !doneSet.has(l.id));
+  return (
+    <div className="mj-sheet-wrap" onClick={onClose}>
+      <div className="mj-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="mj-sheet-grab" />
+        <div className="mj-step-eyebrow" style={{ color: unit.accent }}>{unit.title}</div>
+        <h3 className="mj-sheet-title">{step.title}</h3>
+        <div className="mj-step-lessons">
+          {step.lessons.map((l, i) => {
+            const isDone = doneSet.has(l.id);
+            const isNext = i === nextIdx;
+            const playable = isDone || isNext;
+            return (
+              <button
+                key={l.id}
+                className={"mj-step-lesson" + (isNext ? " mj-step-lesson-next" : "")}
+                disabled={!playable}
+                onClick={() => onPlay(l)}
+                style={isNext ? { borderColor: unit.accent } : undefined}
+              >
+                <span
+                  className="mj-step-dot"
+                  style={{ background: isDone ? unit.accent : isNext ? "transparent" : T.panelHi, borderColor: unit.accent, color: isDone ? "#11201e" : unit.accent }}
+                >
+                  {isDone ? "✓" : isNext ? "▶" : ""}
+                </span>
+                <span className="mj-step-ltitle">{l.title}</span>
+                <span className="mj-step-lstatus">
+                  {isDone ? "done" : isNext ? "start" : "locked"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   Profiles + accountability
+   ========================================================= */
+const DEFAULT_SETTINGS = {
+  dialect: "Modern Standard Arabic (MSA)",
+  level: "Beginner",
+  goal: "Everyday conversation",
+  showTranslit: true,
+  showEnglish: true,
+  sfx: true,
+};
+const AVATAR_COLORS = ["#E0A33E", "#3FB89C", "#A992D6", "#D98C5F", "#6FA8C7"];
+const TOTAL_LESSONS = TOTAL_STEPS;
+
+function lessonsDone(progress) {
+  const set = new Set((progress && progress.done) || []);
+  return ALL_STEPS.filter((s) => stepComplete(s, set)).length;
+}
+function accuracy(progress) {
+  const s = progress && progress.stats;
+  if (!s || !s.answered) return null;
+  return Math.round((s.correct / s.answered) * 100);
+}
+function relTime(ts) {
+  if (!ts) return "—";
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return m + "m ago";
+  const h = Math.round(m / 60);
+  if (h < 24) return h + "h ago";
+  return Math.round(h / 24) + "d ago";
+}
+
+/* ---- streaks (days active) ---- */
+function todayStr(d) {
+  const x = d || new Date();
+  return (
+    x.getFullYear() +
+    "-" +
+    String(x.getMonth() + 1).padStart(2, "0") +
+    "-" +
+    String(x.getDate()).padStart(2, "0")
+  );
+}
+function streakFrom(daySet) {
+  // longest run of consecutive days ending today or yesterday
+  const t = new Date();
+  let cur = todayStr(t);
+  if (!daySet.has(cur)) {
+    t.setDate(t.getDate() - 1);
+    cur = todayStr(t);
+    if (!daySet.has(cur)) return 0;
+  }
+  let count = 0;
+  while (daySet.has(todayStr(t))) {
+    count += 1;
+    t.setDate(t.getDate() - 1);
+  }
+  return count;
+}
+function ownStreak(progress) {
+  return streakFrom(new Set((progress && progress.days) || []));
+}
+function sharedStreak(profiles) {
+  if (profiles.length < 2) return 0;
+  const sets = profiles.map((p) => new Set((p.progress && p.progress.days) || []));
+  const inAll = (d) => sets.every((s) => s.has(d));
+  const t = new Date();
+  let cur = todayStr(t);
+  if (!inAll(cur)) {
+    t.setDate(t.getDate() - 1);
+    if (!inAll(todayStr(t))) return 0;
+  }
+  let count = 0;
+  while (inAll(todayStr(t))) {
+    count += 1;
+    t.setDate(t.getDate() - 1);
+  }
+  return count;
+}
+
+function Avatar({ name, color, size = 40 }) {
+  const initial = (name || "?").trim().charAt(0).toUpperCase() || "?";
+  return (
+    <span
+      className="mj-avatar"
+      style={{ width: size, height: size, background: color || T.gold, fontSize: size * 0.42 }}
+    >
+      {initial}
+    </span>
+  );
+}
+
+function ProfileGate({ profiles, onChoose, onCreate }) {
+  const [adding, setAdding] = useState(profiles.length === 0);
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(AVATAR_COLORS[0]);
+  return (
+    <div className="mj-gate">
+      <div className="mj-gate-inner">
+        <div className="mj-wordmark mj-gate-mark" dir="rtl" lang="ar">مَجْلِس</div>
+        <div className="mj-gate-title">{adding ? "Create a profile" : "Who's learning?"}</div>
+        {!adding ? (
+          <>
+            <div className="mj-gate-list">
+              {profiles.map((p) => (
+                <button key={p.id} className="mj-gate-profile" onClick={() => onChoose(p)}>
+                  <Avatar name={p.name} color={p.color} size={50} />
+                  <div className="mj-gate-pname">{p.name}</div>
+                  <div className="mj-gate-psub">
+                    {lessonsDone(p.progress)} / {TOTAL_LESSONS} steps
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button className="mj-gate-add" onClick={() => setAdding(true)}>
+              + Add someone
+            </button>
+          </>
+        ) : (
+          <div className="mj-gate-form">
+            <input
+              className="mj-input"
+              placeholder="Your name"
+              value={name}
+              maxLength={24}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && name.trim()) onCreate(name, color);
+              }}
+            />
+            <div className="mj-colorrow">
+              {AVATAR_COLORS.map((c) => (
+                <button
+                  key={c}
+                  className="mj-colordot"
+                  onClick={() => setColor(c)}
+                  style={{ background: c, outline: color === c ? `2px solid ${T.cream}` : "none", outlineOffset: 2 }}
+                  aria-label="pick color"
+                />
+              ))}
+            </div>
+            <button className="mj-done" disabled={!name.trim()} onClick={() => onCreate(name, color)}>
+              Start learning
+            </button>
+            {profiles.length > 0 && (
+              <button className="mj-gate-back" onClick={() => setAdding(false)}>
+                ← back
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProfileSheet({ profiles, meId, onSwitch, onCreate, onClose }) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(AVATAR_COLORS[1]);
+  return (
+    <div className="mj-sheet-wrap" onClick={onClose}>
+      <div className="mj-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="mj-sheet-grab" />
+        <h3 className="mj-sheet-title">{adding ? "Add a profile" : "Profiles"}</h3>
+        {!adding ? (
+          <>
+            {profiles.map((p) => (
+              <button
+                key={p.id}
+                className={"mj-sheet-profile" + (p.id === meId ? " mj-sheet-profile-me" : "")}
+                onClick={() => onSwitch(p)}
+              >
+                <Avatar name={p.name} color={p.color} size={36} />
+                <div className="mj-sheet-pname">
+                  {p.name}
+                  {p.id === meId && <span className="mj-youtag">you</span>}
+                </div>
+                <div className="mj-sheet-psub">
+                  {lessonsDone(p.progress)}/{TOTAL_LESSONS}
+                </div>
+              </button>
+            ))}
+            <button className="mj-gate-add" onClick={() => setAdding(true)}>
+              + Add someone
+            </button>
+          </>
+        ) : (
+          <div className="mj-gate-form">
+            <input
+              className="mj-input"
+              placeholder="Name"
+              value={name}
+              maxLength={24}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <div className="mj-colorrow">
+              {AVATAR_COLORS.map((c) => (
+                <button
+                  key={c}
+                  className="mj-colordot"
+                  onClick={() => setColor(c)}
+                  style={{ background: c, outline: color === c ? `2px solid ${T.cream}` : "none", outlineOffset: 2 }}
+                  aria-label="pick color"
+                />
+              ))}
+            </div>
+            <button className="mj-done" disabled={!name.trim()} onClick={() => onCreate(name, color)}>
+              Create
+            </button>
+            <button className="mj-gate-back" onClick={() => setAdding(false)}>
+              ← back
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Together({ profiles, meId, onNudge, onRefresh }) {
+  useEffect(() => {
+    if (onRefresh) onRefresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <div className="mj-together">
+      <div className="mj-scroll">
+        <div className="mj-pathhead">
+          <div className="mj-pathtitle">Together</div>
+          <div className="mj-pathsub">You and your study partner, side by side</div>
+        </div>
+
+        {(() => {
+          const ss = sharedStreak(profiles);
+          return (
+            <div className={"mj-streak" + (ss > 0 ? " mj-streak-on" : "")}>
+              <span className="mj-streak-flame">{ss > 0 ? "🔥" : "🌱"}</span>
+              <div className="mj-streak-text">
+                <div className="mj-streak-num">
+                  {ss} day{ss === 1 ? "" : "s"}
+                </div>
+                <div className="mj-streak-lbl">
+                  {ss > 0 ? "shared streak — days you both showed up" : "no shared streak yet — both practice today to start one"}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {profiles.length < 2 && (
+          <div className="mj-allclear" style={{ borderColor: T.edge, color: T.muted }}>
+            Add a second profile so you two can keep each other honest. Tap your
+            avatar at the top right → Add someone.
+          </div>
+        )}
+
+        <div className="mj-climb">
+          <span className="mj-climb-flag">🏁 finish</span>
+          {profiles.map((p, i) => {
+            const pct = Math.min(1, lessonsDone(p.progress) / TOTAL_LESSONS);
+            return (
+              <div
+                key={p.id}
+                className="mj-climber"
+                style={{ left: 18 + i * 60 + "px", bottom: `calc(${pct} * (100% - 78px) + 10px)` }}
+              >
+                <Avatar name={p.name} color={p.color} size={42} />
+                <span className="mj-climber-name">{p.name.split(" ")[0]}</span>
+              </div>
+            );
+          })}
+          <span className="mj-climb-start">start</span>
+        </div>
+
+        {profiles.map((p) => {
+          const acc = accuracy(p.progress);
+          const dn = lessonsDone(p.progress);
+          const isMe = p.id === meId;
+          return (
+            <div key={p.id} className={"mj-statcard" + (isMe ? " mj-statcard-me" : "")}>
+              <div className="mj-statcard-head">
+                <Avatar name={p.name} color={p.color} size={40} />
+                <div className="mj-statcard-id">
+                  <div className="mj-statcard-name">
+                    {p.name}
+                    {isMe && <span className="mj-youtag">you</span>}
+                  </div>
+                  <div className="mj-statcard-sub">
+                    active {relTime(p.progress && p.progress.updatedAt)}
+                    {ownStreak(p.progress) > 0 && <> · 🔥 {ownStreak(p.progress)}</>}
+                  </div>
+                </div>
+                {!isMe && onNudge && (
+                  <button className="mj-nudge" onClick={() => onNudge(p)}>
+                    Nudge ⚡
+                  </button>
+                )}
+              </div>
+              <div className="mj-statgrid">
+                <div className="mj-stat">
+                  <div className="mj-statnum">
+                    {dn}
+                    <span className="mj-statden"> / {TOTAL_LESSONS}</span>
+                  </div>
+                  <div className="mj-statlbl">steps done</div>
+                  <div className="mj-bar">
+                    <div className="mj-barfill" style={{ width: (dn / TOTAL_LESSONS) * 100 + "%", background: p.color }} />
+                  </div>
+                </div>
+                <div className="mj-stat">
+                  <div className="mj-statnum">{acc === null ? "—" : acc + "%"}</div>
+                  <div className="mj-statlbl">quiz accuracy</div>
+                  <div className="mj-bar">
+                    <div className="mj-barfill" style={{ width: (acc || 0) + "%", background: T.teal }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   App shell
+   ========================================================= */
+export default function App() {
+  const [ready, setReady] = useState(false);
+  const [profiles, setProfiles] = useState([]);
+  const [meId, setMeId] = useState(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [deck, setDeck] = useState([]);
+  const [learned, setLearned] = useState([]);
+  const [done, setDone] = useState([]);
+  const [stats, setStats] = useState({ answered: 0, correct: 0 });
+  const [days, setDays] = useState([]);
+  const [nudge, setNudge] = useState(null);
+
+  const [activeLesson, setActiveLesson] = useState(null);
+  const [activeStep, setActiveStep] = useState(null);
+  const [view, setView] = useState("path");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [noVoice, setNoVoice] = useState(false);
+  const [, force] = useState(0);
+
+  function hydrate(p) {
+    const pr = p.progress || {};
+    setMeId(p.id);
+    setSettings({ ...DEFAULT_SETTINGS, ...(pr.settings || {}) });
+    setDeck(Array.isArray(pr.deck) ? pr.deck : []);
+    setLearned(Array.isArray(pr.learned) ? pr.learned : []);
+    setDone(Array.isArray(pr.done) ? pr.done : []);
+    setStats(pr.stats || { answered: 0, correct: 0 });
+    setDays(Array.isArray(pr.days) ? pr.days : []);
+    setNudge(pr.nudge && pr.nudge.from ? pr.nudge : null);
+    try {
+      localStorage.setItem("majlis_me", p.id);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  // load profiles, restore the last one used on this device
+  useEffect(() => {
+    (async () => {
+      const all = await loadAll();
+      setProfiles(all);
+      let savedMe = null;
+      try {
+        savedMe = localStorage.getItem("majlis_me");
+      } catch (e) {
+        /* ignore */
+      }
+      const found = all.find((p) => p.id === savedMe);
+      if (found) hydrate(found);
+      setReady(true);
+    })();
+  }, []);
+
+  // save my progress (debounced) and keep my local snapshot fresh
+  const saveTimer = useRef(null);
+  useEffect(() => {
+    if (!ready || !meId) return;
+    const progress = { settings, deck, learned, done, stats, days, updatedAt: Date.now() };
+    setProfiles((ps) => ps.map((p) => (p.id === meId ? { ...p, progress } : p)));
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => saveProgress(meId, progress), 600);
+  }, [settings, deck, learned, done, stats, days, ready, meId]);
+
+  const markToday = useCallback(() => {
+    const t = todayStr();
+    setDays((d) => (d.includes(t) ? d : [...d.slice(-59), t]));
+  }, []);
+
+  const completeLesson = useCallback(
+    (id) => {
+      setDone((d) => (d.includes(id) ? d : [...d, id]));
+      markToday();
+    },
+    [markToday]
+  );
+
+  const recordQuiz = useCallback(
+    (correct, total) => {
+      setStats((s) => ({
+        answered: (s.answered || 0) + total,
+        correct: (s.correct || 0) + correct,
+      }));
+      markToday();
+    },
+    [markToday]
+  );
+
+  function openStep(step, unit) {
+    setActiveStep({ step, unit });
+  }
+  function playLesson(lesson) {
+    setActiveStep(null);
+    setActiveLesson(lesson);
+  }
+
+  function chooseProfile(p) {
+    hydrate(p);
+    setProfileOpen(false);
+    setView("path");
+  }
+  async function createProfile(name, color) {
+    const p = {
+      id: "p-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      name: (name || "").trim() || "New learner",
+      color,
+    };
+    await upsertProfile(p);
+    const withProg = {
+      ...p,
+      progress: { settings: DEFAULT_SETTINGS, deck: [], learned: [], done: [], stats: { answered: 0, correct: 0 } },
+    };
+    setProfiles((ps) => [...ps, withProg]);
+    hydrate(withProg);
+    setProfileOpen(false);
+    setView("path");
+  }
+  async function refreshPeers() {
+    const all = await loadAll();
+    setProfiles((prev) => all.map((p) => (p.id === meId ? prev.find((x) => x.id === meId) || p : p)));
+  }
+  async function nudgePeer(p) {
+    const me = profiles.find((x) => x.id === meId);
+    const ok = await sendNudge(p.id, (me && me.name) || "Someone");
+    setToast(ok ? `Nudged ${p.name.split(" ")[0]} ⚡` : "Couldn't send that nudge");
+    setTimeout(() => setToast(null), 2600);
+  }
+
+  // make voices populate
+  useEffect(() => {
+    if (!window.speechSynthesis) return;
+    const f = () => force((n) => n + 1);
+    window.speechSynthesis.onvoiceschanged = f;
+    f();
+    return () => {
+      if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
+
+  const speak = useCallback(
+    (text) => {
+      if (!window.speechSynthesis) {
+        setNoVoice(true);
+        return;
+      }
+      window.speechSynthesis.cancel();
+      const prefs = VOICE_PREFS[settings.dialect] || ["ar"];
+      const v = pickVoice(prefs);
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = (v && v.lang) || prefs[0];
+      if (v) u.voice = v;
+      u.rate = 0.85;
+      const hasAr = (
+        (window.speechSynthesis.getVoices() || []).some(
+          (vc) => vc.lang && vc.lang.toLowerCase().startsWith("ar")
+        )
+      );
+      if (!hasAr) setNoVoice(true);
+      window.speechSynthesis.speak(u);
+    },
+    [settings.dialect]
+  );
+
+  const addCard = useCallback(
+    (w) => {
+      if (!w.arabic) return;
+      setDeck((d) =>
+        d.some((c) => c.arabic === w.arabic)
+          ? d
+          : [
+              ...d,
+              {
+                id: Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+                arabic: w.arabic,
+                translit: w.translit || "",
+                english: w.english || "",
+                box: 1,
+                due: Date.now(),
+              },
+            ]
+      );
+    },
+    []
+  );
+
+  const dueCount = deck.filter((c) => c.due <= Date.now()).length;
+  const me = profiles.find((p) => p.id === meId);
+
+  return (
+    <div className="mj-root">
+      <style>{CSS}</style>
+
+      {!ready ? (
+        <div className="mj-boot">Opening Majlis…</div>
+      ) : !meId ? (
+        <ProfileGate profiles={profiles} onChoose={chooseProfile} onCreate={createProfile} />
+      ) : (
+        <>
+          <header className="mj-header">
+            <button className="mj-brand" onClick={() => setSettingsOpen(true)}>
+              <span className="mj-wordmark" dir="rtl" lang="ar">
+                مَجْلِس
+              </span>
+              <span className="mj-tagline">
+                {settings.dialect.replace(" (MSA)", "")} · {settings.level}
+                <span className="mj-gear"> ⚙</span>
+              </span>
+            </button>
+            <button
+              className="mj-mechip"
+              onClick={() => setProfileOpen(true)}
+              aria-label="Switch profile"
+            >
+              <Avatar name={me && me.name} color={me && me.color} size={34} />
+            </button>
+          </header>
+
+          {nudge && (
+            <div className="mj-nudgebar" onClick={() => setNudge(null)}>
+              <b>{nudge.from}</b> nudged you — keep it going ⚡{" "}
+              <span className="mj-dismiss">tap to dismiss</span>
+            </div>
+          )}
+
+          <nav className="mj-tabs">
+            {[
+              ["path", "Path"],
+              ["letters", "Letters"],
+              ["converse", "Converse"],
+              ["lessons", "Lessons"],
+              ["quiz", "Quiz"],
+              ["deck", dueCount > 0 ? `Deck · ${dueCount}` : "Deck"],
+              ["together", "Together"],
+            ].map(([k, label]) => (
+              <button
+                key={k}
+                className="mj-tab"
+                onClick={() => {
+                  setView(k);
+                  if (k === "together") refreshPeers();
+                }}
+                style={view === k ? { color: T.cream, borderColor: T.gold } : {}}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+
+          <main className="mj-main">
+            {view === "path" ? (
+              <Path done={done} onOpenStep={openStep} />
+            ) : view === "letters" ? (
+              <Letters
+                settings={settings}
+                speak={speak}
+                learned={learned}
+                setLearned={setLearned}
+                deck={deck}
+                addCard={addCard}
+              />
+            ) : view === "converse" ? (
+              <Converse settings={settings} speak={speak} deck={deck} addCard={addCard} />
+            ) : view === "lessons" ? (
+              <Lessons settings={settings} speak={speak} deck={deck} addCard={addCard} />
+            ) : view === "quiz" ? (
+              <Quiz settings={settings} speak={speak} learned={learned} onQuizDone={recordQuiz} />
+            ) : view === "deck" ? (
+              <Deck settings={settings} speak={speak} deck={deck} setDeck={setDeck} />
+            ) : (
+              <Together profiles={profiles} meId={meId} onNudge={nudgePeer} onRefresh={refreshPeers} />
+            )}
+          </main>
+
+          {noVoice && (
+            <div className="mj-voicebar" onClick={() => setNoVoice(false)}>
+              No Arabic voice found on this device — pronunciation audio may be
+              silent. Tap to dismiss.
+            </div>
+          )}
+          {toast && <div className="mj-toast">{toast}</div>}
+
+          {activeStep && (
+            <StepSheet
+              step={activeStep.step}
+              unit={activeStep.unit}
+              done={done}
+              onPlay={playLesson}
+              onClose={() => setActiveStep(null)}
+            />
+          )}
+          {activeLesson && (
+            <LessonPlayer
+              node={activeLesson}
+              settings={settings}
+              speak={speak}
+              onClose={() => setActiveLesson(null)}
+              onComplete={completeLesson}
+              onQuizDone={recordQuiz}
+            />
+          )}
+          {settingsOpen && (
+            <Settings settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} />
+          )}
+          {profileOpen && (
+            <ProfileSheet
+              profiles={profiles}
+              meId={meId}
+              onSwitch={chooseProfile}
+              onCreate={createProfile}
+              onClose={() => setProfileOpen(false)}
+            />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================
+   Styles
+   ========================================================= */
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Inter:wght@400;500;600&display=swap');
+
+* { box-sizing: border-box; }
+.mj-root {
+  --canvas:${T.canvas};
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  background:
+    radial-gradient(120% 80% at 50% -10%, #18302F 0%, ${T.canvas} 55%);
+  color: ${T.cream};
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+.mj-ar { font-family: 'Amiri', serif; color: ${T.inkText}; line-height: 1.7; }
+
+/* header */
+.mj-header { padding: 16px 20px 10px; }
+.mj-brand {
+  background: none; border: none; padding: 0; cursor: pointer;
+  display: flex; align-items: baseline; gap: 12px; text-align: left;
+}
+.mj-wordmark {
+  font-family: 'Amiri', serif; font-size: 30px; font-weight: 700;
+  color: ${T.cream}; line-height: 1;
+}
+.mj-tagline {
+  font-size: 12px; color: ${T.muted}; letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.mj-gear { color: ${T.gold}; margin-left: 4px; }
+
+/* tabs */
+.mj-tabs {
+  display: flex; gap: 4px; padding: 0 16px;
+  border-bottom: 1px solid ${T.edge};
+}
+.mj-tab {
+  background: none; border: none; cursor: pointer;
+  color: ${T.muted}; font-family: 'Inter', sans-serif;
+  font-size: 14px; font-weight: 500; letter-spacing: .02em;
+  padding: 12px 14px; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: color .15s;
+}
+.mj-tab:hover { color: ${T.cream}; }
+
+.mj-main { flex: 1; min-height: 0; display: flex; }
+.mj-boot, .mj-converse, .mj-lessons, .mj-deck, .mj-review {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.mj-boot { align-items: center; justify-content: center; color: ${T.muted}; }
+
+.mj-scroll {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 20px 16px 28px;
+  scrollbar-width: thin; scrollbar-color: ${T.edge} transparent;
+}
+.mj-scroll::-webkit-scrollbar { width: 7px; }
+.mj-scroll::-webkit-scrollbar-thumb { background: ${T.edge}; border-radius: 4px; }
+
+/* the parchment card — Arabic lives here */
+.mj-card {
+  background:
+    linear-gradient(${T.parchment}, ${T.parchment}) padding-box;
+  border: 1px solid ${T.parchmentEdge};
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: 0 10px 28px -16px rgba(0,0,0,.6);
+  margin-bottom: 10px;
+}
+.mj-card-top {
+  display: flex; align-items: flex-start; gap: 12px;
+  justify-content: space-between;
+}
+.mj-ar { font-size: 27px; flex: 1; }
+.mj-ar-big { font-size: 38px; text-align: center; width: 100%; }
+.mj-ar-row { font-size: 22px; }
+.mj-speak {
+  flex: none; width: 38px; height: 38px; border-radius: 10px;
+  background: #fff6e4; border: 1px solid #ecdcb6; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .12s, background .15s;
+}
+.mj-speak:hover { background: #fdedca; transform: translateY(-1px); }
+.mj-speak:active { transform: translateY(0); }
+
+.mj-reveal { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.mj-translit {
+  font-family: 'Newsreader', serif; font-style: italic;
+  font-size: 17px; color: #6a5a3a;
+}
+.mj-en { font-size: 15px; color: ${T.inkText}; font-weight: 500; }
+.mj-peek {
+  align-self: flex-start; background: none; border: none; cursor: pointer;
+  color: #9c8a63; font-size: 13px; font-style: italic;
+  font-family: 'Newsreader', serif; padding: 2px 0;
+  border-bottom: 1px dashed #c9b78c;
+}
+.mj-peek:hover { color: #6a5a3a; }
+
+.mj-add {
+  margin-top: 14px; background: none; cursor: pointer;
+  border: 1px solid #d8c79e; border-radius: 999px;
+  color: #7a6843; font-size: 13px; font-weight: 500;
+  padding: 6px 14px; transition: all .15s;
+}
+.mj-add:hover:not(:disabled) { background: #ece0c2; }
+.mj-add:disabled { cursor: default; }
+
+/* conversation */
+.mj-turn { margin-bottom: 18px; }
+.mj-userwrap { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.mj-userbubble {
+  background: ${T.panelHi}; border: 1px solid ${T.edge};
+  color: ${T.cream}; padding: 11px 15px; border-radius: 14px 14px 4px 14px;
+  max-width: 80%; font-size: 15px; line-height: 1.5;
+}
+.mj-correction {
+  background: ${T.roseDim}; border: 1px solid #5a3a37;
+  border-radius: 12px; padding: 10px 14px; margin-bottom: 8px;
+  font-size: 14px; color: #f0cfcc; line-height: 1.45;
+}
+.mj-corr-label {
+  display: inline-block; font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: ${T.rose}; margin-right: 8px;
+  font-weight: 600;
+}
+.mj-words { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.mj-wordchip {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  background: ${T.panel}; border: 1px solid ${T.edge};
+  border-radius: 999px; padding: 6px 12px 6px 14px;
+}
+.mj-wordchip:hover:not(:disabled) { border-color: ${T.gold}; }
+.mj-wordchip:disabled { cursor: default; }
+.mj-wordar { font-family: 'Amiri', serif; font-size: 18px; color: ${T.cream}; }
+.mj-worden { font-size: 11px; color: ${T.muted}; letter-spacing: .03em; }
+
+.mj-typing { display: flex; gap: 5px; padding: 8px 4px; }
+.mj-typing-center { justify-content: center; padding: 28px; }
+.mj-typing span {
+  width: 7px; height: 7px; border-radius: 50%; background: ${T.muted};
+  animation: mjb 1.1s infinite ease-in-out;
+}
+.mj-typing span:nth-child(2) { animation-delay: .18s; }
+.mj-typing span:nth-child(3) { animation-delay: .36s; }
+@keyframes mjb { 0%,80%,100% { opacity:.25; transform:translateY(0);} 40% { opacity:1; transform:translateY(-4px);} }
+
+.mj-error {
+  color: ${T.rose}; font-size: 14px; padding: 10px 14px;
+  border: 1px solid #5a3a37; border-radius: 10px; margin-top: 8px;
+}
+
+/* composer */
+.mj-composer {
+  display: flex; align-items: flex-end; gap: 10px;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid ${T.edge}; background: ${T.canvas};
+}
+.mj-input {
+  flex: 1; resize: none; max-height: 120px;
+  background: ${T.panel}; border: 1px solid ${T.edge}; border-radius: 12px;
+  color: ${T.cream}; font-family: 'Inter', sans-serif; font-size: 15px;
+  padding: 11px 14px; line-height: 1.4; outline: none;
+}
+.mj-input:focus { border-color: ${T.gold}; }
+.mj-input::placeholder { color: #6f8783; }
+.mj-send {
+  flex: none; width: 44px; height: 44px; border-radius: 12px;
+  background: ${T.gold}; border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .12s, opacity .15s;
+}
+.mj-send:hover:not(:disabled) { transform: translateY(-1px); }
+.mj-send:disabled { opacity: .4; cursor: default; }
+
+/* lessons */
+.mj-lead, .mj-lesson-intro {
+  font-family: 'Newsreader', serif; font-size: 17px; line-height: 1.55;
+  color: ${T.muted}; margin: 0 0 18px;
+}
+.mj-topics { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.mj-chip {
+  background: ${T.panel}; border: 1px solid ${T.edge}; cursor: pointer;
+  color: ${T.cream}; border-radius: 999px; padding: 8px 14px;
+  font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500;
+  transition: all .15s;
+}
+.mj-chip:hover { border-color: ${T.muted}; }
+.mj-customrow { display: flex; gap: 8px; margin-bottom: 8px; }
+.mj-custominput { max-height: none; }
+.mj-build, .mj-startreview, .mj-done, .mj-show, .mj-got, .mj-again {
+  font-family: 'Inter', sans-serif; cursor: pointer; font-weight: 600;
+  border-radius: 12px; transition: transform .12s, opacity .15s;
+}
+.mj-build {
+  flex: none; background: ${T.gold}; border: none; color: #1a1205;
+  padding: 0 18px; font-size: 14px;
+}
+.mj-build:disabled { opacity: .4; cursor: default; }
+.mj-lesson { margin-top: 20px; }
+.mj-lesson-title {
+  font-family: 'Newsreader', serif; font-size: 25px; font-weight: 500;
+  color: ${T.cream}; margin: 0 0 4px;
+}
+.mj-lesson-intro { margin-bottom: 18px; }
+.mj-note {
+  font-size: 13px; color: ${T.muted}; font-style: italic;
+  margin: -4px 4px 14px; line-height: 1.45;
+}
+.mj-tip {
+  margin-top: 18px; background: ${T.tealDim}33; border: 1px solid ${T.tealDim};
+  border-radius: 12px; padding: 12px 15px; font-size: 14px;
+  color: #bfe7dc; line-height: 1.5;
+}
+.mj-tip-label {
+  display: inline-block; font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: ${T.teal}; margin-right: 8px; font-weight: 600;
+}
+
+/* deck */
+.mj-deckhead {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 22px;
+}
+.mj-decknum {
+  font-family: 'Newsreader', serif; font-size: 40px; line-height: 1; color: ${T.cream};
+}
+.mj-decklabel { font-size: 13px; color: ${T.muted}; margin-top: 2px; }
+.mj-startreview {
+  background: ${T.teal}; border: none; color: #06201b;
+  padding: 12px 18px; font-size: 14px;
+}
+.mj-startreview:disabled { background: ${T.panel}; color: ${T.muted}; cursor: default; }
+.mj-empty, .mj-allclear {
+  font-family: 'Newsreader', serif; font-size: 16px; line-height: 1.6;
+  color: ${T.muted}; padding: 20px; text-align: center;
+  border: 1px dashed ${T.edge}; border-radius: 14px; margin-bottom: 20px;
+}
+.mj-allclear { color: ${T.teal}; border-color: ${T.tealDim}; }
+.mj-deckrow {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 6px; border-bottom: 1px solid ${T.edge};
+}
+.mj-rowspeak { background: none; border: none; padding: 0; cursor: pointer; flex: none; }
+.mj-rowtext { flex: 1; min-width: 0; }
+.mj-ar-row { color: ${T.cream}; }
+.mj-rowmeta { font-size: 13px; color: ${T.muted}; margin-top: 2px; }
+.mj-rowright { display: flex; align-items: center; gap: 10px; flex: none; }
+.mj-box {
+  font-size: 11px; color: ${T.teal}; border: 1px solid ${T.tealDim};
+  border-radius: 6px; padding: 2px 7px; letter-spacing: .03em;
+}
+.mj-del {
+  background: none; border: none; cursor: pointer; color: ${T.muted};
+  font-size: 22px; line-height: 1; padding: 0 4px;
+}
+.mj-del:hover { color: ${T.rose}; }
+
+/* review */
+.mj-review-top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid ${T.edge};
+}
+.mj-back { background: none; border: none; cursor: pointer; color: ${T.muted}; font-size: 14px; }
+.mj-back:hover { color: ${T.cream}; }
+.mj-progress { font-size: 13px; color: ${T.muted}; letter-spacing: .05em; }
+.mj-review-stage {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 24px 20px;
+}
+.mj-review-card { width: 100%; max-width: 460px; padding: 32px 24px; }
+.mj-show {
+  width: 100%; margin-top: 20px; background: ${T.inkText}; border: none;
+  color: ${T.parchment}; padding: 13px; font-size: 15px;
+}
+.mj-grade {
+  display: flex; gap: 12px; padding: 16px 20px calc(20px + env(safe-area-inset-bottom));
+  max-width: 500px; margin: 0 auto; width: 100%;
+}
+.mj-again, .mj-got { flex: 1; padding: 15px; font-size: 15px; border: none; }
+.mj-again { background: ${T.panelHi}; color: ${T.rose}; border: 1px solid #5a3a37; }
+.mj-got { background: ${T.teal}; color: #06201b; }
+.mj-again:hover, .mj-got:hover { transform: translateY(-1px); }
+
+/* settings sheet */
+.mj-sheet-wrap {
+  position: fixed; inset: 0; background: rgba(6,14,15,.6);
+  display: flex; align-items: flex-end; justify-content: center;
+  z-index: 40; animation: mjfade .2s ease;
+}
+@keyframes mjfade { from { opacity: 0; } }
+.mj-sheet {
+  background: ${T.panel}; border: 1px solid ${T.edge};
+  border-radius: 22px 22px 0 0; width: 100%; max-width: 560px;
+  padding: 10px 20px calc(24px + env(safe-area-inset-bottom));
+  max-height: 88vh; overflow-y: auto; animation: mjrise .26s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes mjrise { from { transform: translateY(40px); opacity: .4; } }
+.mj-sheet-grab {
+  width: 40px; height: 4px; border-radius: 2px; background: ${T.edge};
+  margin: 6px auto 16px;
+}
+.mj-sheet-title {
+  font-family: 'Newsreader', serif; font-size: 22px; font-weight: 500;
+  color: ${T.cream}; margin: 0 0 18px;
+}
+.mj-field { margin-bottom: 20px; }
+.mj-flabel {
+  display: block; font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: ${T.muted}; margin-bottom: 10px; font-weight: 600;
+}
+.mj-opts { display: flex; flex-wrap: wrap; gap: 8px; }
+.mj-hint {
+  font-size: 13px; color: ${T.muted}; font-style: italic; line-height: 1.5;
+  margin: 10px 2px 0; font-family: 'Newsreader', serif;
+}
+.mj-done {
+  width: 100%; margin-top: 8px; background: ${T.gold}; border: none;
+  color: #1a1205; padding: 14px; font-size: 15px;
+}
+
+.mj-voicebar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+  background: ${T.roseDim}; border-top: 1px solid #5a3a37; cursor: pointer;
+  color: #f0cfcc; font-size: 13px; text-align: center; padding: 10px 16px;
+}
+
+/* letters */
+.mj-letters { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mj-truths { display: flex; flex-direction: column; gap: 9px; margin-bottom: 22px; }
+.mj-truth {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: ${T.panel}; border: 1px solid ${T.edge}; border-radius: 12px;
+  padding: 13px 15px; font-size: 14.5px; line-height: 1.5; color: ${T.cream};
+}
+.mj-truthnum {
+  flex: none; width: 26px; height: 26px; border-radius: 7px;
+  background: ${T.panelHi}; color: ${T.gold};
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; margin-top: -1px;
+}
+.mj-ltr-progress { margin-bottom: 16px; }
+.mj-ltr-progress > span { font-size: 13px; color: ${T.muted}; letter-spacing: .04em; }
+.mj-bar {
+  height: 6px; border-radius: 3px; background: ${T.panel};
+  border: 1px solid ${T.edge}; margin-top: 7px; overflow: hidden;
+}
+.mj-barfill { height: 100%; background: ${T.teal}; transition: width .3s ease; }
+.mj-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+.mj-gridcell {
+  position: relative; cursor: pointer;
+  background: ${T.parchment}; border: 1px solid ${T.parchmentEdge};
+  border-radius: 12px; padding: 12px 6px 9px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  transition: transform .12s, box-shadow .15s;
+}
+.mj-gridcell:hover { transform: translateY(-2px); box-shadow: 0 8px 20px -12px rgba(0,0,0,.55); }
+.mj-gridglyph { font-size: 34px; color: ${T.inkText}; line-height: 1; }
+.mj-gridname { font-size: 11px; color: #7a6843; letter-spacing: .02em; }
+.mj-dot {
+  position: absolute; top: 8px; right: 8px; width: 8px; height: 8px;
+  border-radius: 50%; background: ${T.teal};
+}
+.mj-ltr-detailtop {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.mj-ltr-hero { text-align: center; padding: 26px 22px; }
+.mj-ltr-hero .mj-card-top { justify-content: center; position: relative; }
+.mj-ltr-hero .mj-speak { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+.mj-ltr-big { font-size: 72px; flex: none; }
+.mj-ltr-name {
+  font-family: 'Newsreader', serif; font-size: 24px; color: ${T.inkText};
+  margin-top: 10px; text-transform: capitalize;
+}
+.mj-ltr-sound { font-size: 15px; color: #6a5a3a; margin-top: 2px; }
+.mj-ltr-sound b { color: ${T.inkText}; }
+.mj-ltr-hint {
+  font-family: 'Newsreader', serif; font-size: 15.5px; line-height: 1.55;
+  color: #5e5036; margin-top: 12px;
+}
+.mj-formlabel {
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: ${T.muted}; font-weight: 600; margin: 22px 2px 10px;
+}
+.mj-forms { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.mj-form {
+  background: ${T.parchment}; border: 1px solid ${T.parchmentEdge};
+  border-radius: 11px; padding: 14px 4px 8px; text-align: center;
+}
+.mj-formglyph { font-size: 32px; color: ${T.inkText}; line-height: 1.2; min-height: 42px; }
+.mj-formcap { font-size: 11px; color: #7a6843; margin-top: 4px; }
+.mj-ltr-nav { display: flex; align-items: center; gap: 8px; margin-top: 22px; }
+.mj-navbtn {
+  flex: none; background: ${T.panel}; border: 1px solid ${T.edge}; cursor: pointer;
+  color: ${T.cream}; border-radius: 10px; padding: 11px 14px; font-size: 13px;
+  font-family: 'Inter', sans-serif; font-weight: 500;
+}
+.mj-navbtn:disabled { opacity: .35; cursor: default; }
+.mj-learnbtn {
+  flex: 1; background: none; border: 1px solid ${T.tealDim}; cursor: pointer;
+  color: ${T.teal}; border-radius: 10px; padding: 11px; font-size: 14px;
+  font-family: 'Inter', sans-serif; font-weight: 600; transition: all .15s;
+}
+
+/* quiz */
+.mj-quiz { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mj-sectlabel {
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: ${T.muted}; font-weight: 600; margin: 0 2px 12px;
+}
+.mj-bigbtn {
+  display: flex; align-items: center; gap: 16px; width: 100%; cursor: pointer;
+  background: ${T.panel}; border: 1px solid ${T.edge}; border-radius: 14px;
+  padding: 16px 18px; margin-bottom: 10px; text-align: left;
+  transition: transform .12s, border-color .15s;
+}
+.mj-bigbtn:hover { transform: translateY(-2px); border-color: ${T.gold}; }
+.mj-bigbtn-ar {
+  flex: none; width: 52px; height: 52px; border-radius: 12px;
+  background: ${T.parchment}; color: ${T.inkText};
+  font-family: 'Amiri', serif; font-size: 22px;
+  display: flex; align-items: center; justify-content: center;
+}
+.mj-bigbtn-teal { background: ${T.tealDim}; color: ${T.teal}; font-size: 24px; }
+.mj-bigbtn-text { display: flex; flex-direction: column; gap: 3px; }
+.mj-bigbtn-text b { font-size: 15.5px; color: ${T.cream}; font-weight: 600; }
+.mj-bigbtn-text small { font-size: 13px; color: ${T.muted}; }
+
+.mj-qprompt {
+  font-family: 'Newsreader', serif; font-size: 21px; line-height: 1.4;
+  color: ${T.cream}; margin: 6px 2px 16px;
+}
+.mj-qdisplay { text-align: center; padding: 22px; }
+.mj-qdisplay .mj-card-top { justify-content: center; position: relative; }
+.mj-qdisplay .mj-speak { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+.mj-qglyph { font-size: 58px; flex: none; }
+.mj-qphrase { font-size: 30px; flex: none; }
+
+.mj-options { display: flex; flex-direction: column; gap: 9px; }
+.mj-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; cursor: pointer; text-align: left;
+  background: ${T.panel}; border: 1px solid ${T.edge}; border-radius: 12px;
+  padding: 14px 16px; transition: border-color .15s, background .15s;
+}
+.mj-option:hover:not(:disabled) { border-color: ${T.muted}; }
+.mj-opttext { font-size: 15px; color: ${T.cream}; }
+.mj-optar { font-size: 26px; color: ${T.cream}; }
+.mj-opt-correct {
+  background: ${T.tealDim}55; border-color: ${T.teal};
+}
+.mj-opt-correct .mj-opttext, .mj-opt-correct .mj-optar { color: #d4f3ea; }
+.mj-opt-wrong { background: ${T.roseDim}; border-color: ${T.rose}; }
+.mj-opt-dim { opacity: .5; }
+.mj-mark { flex: none; font-size: 16px; color: ${T.teal}; font-weight: 700; }
+.mj-markx { color: ${T.rose}; }
+
+.mj-qfoot { margin-top: 16px; }
+.mj-explain {
+  background: ${T.panelHi}; border: 1px solid ${T.edge}; border-radius: 12px;
+  padding: 12px 15px; font-size: 14px; line-height: 1.5; color: ${T.muted};
+  margin-bottom: 12px;
+}
+.mj-next {
+  width: 100%; background: ${T.gold}; border: none; color: #1a1205;
+  padding: 14px; font-size: 15px; font-weight: 600; border-radius: 12px;
+  cursor: pointer; font-family: 'Inter', sans-serif; transition: transform .12s;
+}
+.mj-next:hover { transform: translateY(-1px); }
+
+.mj-resultwrap { display: flex; align-items: center; justify-content: center; }
+.mj-result { text-align: center; padding: 30px 20px; max-width: 360px; }
+.mj-resultscore {
+  font-family: 'Newsreader', serif; font-size: 66px; line-height: 1; color: ${T.cream};
+}
+.mj-resultslash { color: ${T.muted}; font-size: 40px; }
+.mj-resultmsg {
+  font-family: 'Newsreader', serif; font-size: 18px; color: ${T.muted};
+  margin: 14px 0 26px; line-height: 1.5;
+}
+
+/* quiz answer feedback */
+.mj-markwrap {
+  position: relative; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+}
+.mj-mark-pop { animation: mj-pop .4s cubic-bezier(.2,1.5,.4,1) both; }
+@keyframes mj-pop {
+  0% { transform: scale(0); opacity: 0; }
+  60% { transform: scale(1.35); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.mj-markx { color: #E5645F; }
+.mj-spark-burst { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+.mj-sparkray { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.mj-spark {
+  position: absolute; left: -3px; top: -3px; width: 6px; height: 6px;
+  border-radius: 50%; background: #61E3A4; box-shadow: 0 0 6px #61E3A4;
+  animation: mj-spark .55s ease-out forwards;
+}
+@keyframes mj-spark {
+  0% { opacity: 0; transform: translateY(-1px) scale(.3); }
+  30% { opacity: 1; transform: translateY(-8px) scale(1); }
+  100% { opacity: 0; transform: translateY(-18px) scale(.2); }
+}
+.mj-opt-wrong { animation: mj-shake .36s ease both; }
+@keyframes mj-shake {
+  0%, 100% { transform: translateX(0); }
+  18% { transform: translateX(-6px); }
+  36% { transform: translateX(6px); }
+  54% { transform: translateX(-4px); }
+  72% { transform: translateX(4px); }
+  88% { transform: translateX(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mj-spark-burst { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+/* scrollable tab bar (6 tabs) */
+.mj-tabs { overflow-x: auto; scrollbar-width: none; }
+.mj-tabs::-webkit-scrollbar { display: none; }
+.mj-tab { flex: none; white-space: nowrap; }
+
+/* shared quiz runner progress */
+.mj-runprogress { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.mj-runbar {
+  flex: 1; height: 8px; border-radius: 4px; background: ${T.panel};
+  border: 1px solid ${T.edge}; overflow: hidden;
+}
+.mj-runfill { height: 100%; background: ${T.teal}; border-radius: 4px; transition: width .3s ease; }
+.mj-runcount { flex: none; font-size: 12px; color: ${T.muted}; letter-spacing: .04em; }
+
+/* curriculum path */
+.mj-pathview { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mj-pathhead { margin-bottom: 8px; }
+.mj-pathtitle { font-family: 'Newsreader', serif; font-size: 26px; color: ${T.cream}; }
+.mj-pathsub { font-size: 13px; color: ${T.muted}; margin: 2px 0 9px; }
+.mj-pathwrap { position: relative; padding: 6px 0 10px; }
+.mj-spine {
+  position: absolute; top: 10px; bottom: 40px; left: 50%; width: 2px;
+  transform: translateX(-1px);
+  background: repeating-linear-gradient(${T.edge} 0 7px, transparent 7px 16px);
+}
+.mj-unit-block { position: relative; }
+.mj-unit {
+  border-radius: 14px; padding: 14px 18px; margin: 20px 0 6px;
+  color: #11201e; box-shadow: 0 10px 24px -16px rgba(0,0,0,.8);
+}
+.mj-unit-eyebrow {
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  font-weight: 700; opacity: .65;
+}
+.mj-unit-title { font-family: 'Newsreader', serif; font-size: 21px; font-weight: 600; margin-top: 1px; }
+.mj-unit-sub { font-size: 13px; opacity: .82; margin-top: 1px; }
+.mj-noderow {
+  position: relative; display: flex; flex-direction: column; align-items: center;
+  gap: 8px; padding: 15px 0;
+}
+.mj-nodewrap { position: relative; display: flex; flex-direction: column; align-items: center; }
+.mj-node {
+  position: relative; width: 66px; height: 66px; border-radius: 50%;
+  background: ${T.panel}; border: 2px solid ${T.edge}; color: ${T.muted};
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 6px 0 0 rgba(0,0,0,.30); transition: transform .1s;
+}
+.mj-node:hover:not(:disabled) { transform: translateY(-2px); }
+.mj-node:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 2px 0 0 rgba(0,0,0,.30); }
+.mj-node-done, .mj-node-current { color: #11201e; }
+.mj-node-locked { opacity: .5; cursor: default; box-shadow: 0 4px 0 0 rgba(0,0,0,.22); }
+.mj-node-glyph { font-family: 'Amiri', serif; font-size: 30px; line-height: 1; }
+.mj-node-pulse {
+  position: absolute; inset: -6px; border-radius: 50%; border: 2px solid;
+  animation: mj-pulse 1.7s ease-out infinite; pointer-events: none;
+}
+@keyframes mj-pulse {
+  0% { transform: scale(.9); opacity: .75; }
+  100% { transform: scale(1.3); opacity: 0; }
+}
+.mj-node-flag {
+  position: absolute; top: -17px; left: 50%; transform: translateX(-50%);
+  background: ${T.cream}; color: ${T.canvas}; font-size: 10px; font-weight: 700;
+  letter-spacing: .1em; padding: 3px 9px; border-radius: 6px; white-space: nowrap;
+}
+.mj-node-flag::after {
+  content: ""; position: absolute; left: 50%; bottom: -4px; transform: translateX(-50%);
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 5px solid ${T.cream};
+}
+.mj-node-caption { font-size: 12.5px; color: ${T.cream}; text-align: center; max-width: 140px; line-height: 1.3; }
+.mj-path-end {
+  text-align: center; color: ${T.muted}; font-style: italic;
+  font-family: 'Newsreader', serif; font-size: 14px; padding: 24px 0 6px;
+}
+
+/* lesson player overlay */
+.mj-player {
+  position: fixed; inset: 0; z-index: 50; background: ${T.canvas};
+  display: flex; flex-direction: column; animation: mjfade .2s ease;
+}
+.mj-player-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px 10px; border-bottom: 1px solid ${T.edge};
+}
+.mj-player-close {
+  width: 30px; height: 30px; border-radius: 8px; background: ${T.panel};
+  border: 1px solid ${T.edge}; color: ${T.cream}; cursor: pointer; font-size: 14px;
+}
+.mj-player-title {
+  font-family: 'Newsreader', serif; font-size: 18px; color: ${T.cream};
+  text-align: center; flex: 1;
+}
+.mj-player-body { padding-top: 18px; }
+.mj-teach-letter { display: flex; align-items: center; gap: 16px; padding: 14px 18px; }
+.mj-teach-glyph { font-size: 40px; flex: none; width: 50px; text-align: center; line-height: 1; }
+.mj-teach-info { flex: 1; }
+.mj-teach-name {
+  font-family: 'Newsreader', serif; font-size: 19px; color: ${T.inkText};
+  text-transform: capitalize;
+}
+.mj-teach-sound { font-size: 14px; color: #6a5a3a; margin-top: 1px; }
+.mj-teach-sound b { color: ${T.inkText}; }
+.mj-result-btns { display: flex; gap: 10px; justify-content: center; }
+
+/* header layout with profile chip */
+.mj-header { display: flex; align-items: center; justify-content: space-between; }
+.mj-mechip {
+  background: none; border: none; padding: 0; cursor: pointer; flex: none;
+}
+.mj-avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; color: #11201e; font-weight: 700;
+  font-family: 'Inter', sans-serif; line-height: 1; flex: none;
+}
+
+/* nudge + toast */
+.mj-nudgebar {
+  background: ${T.tealDim}; border-bottom: 1px solid ${T.teal};
+  color: #cdeee5; font-size: 13.5px; text-align: center; padding: 9px 16px;
+  cursor: pointer;
+}
+.mj-nudgebar b { color: ${T.cream}; }
+.mj-dismiss { color: ${T.muted}; font-size: 12px; }
+.mj-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  background: ${T.panelHi}; border: 1px solid ${T.teal}; color: ${T.cream};
+  padding: 11px 18px; border-radius: 999px; font-size: 14px; z-index: 60;
+  box-shadow: 0 10px 30px -12px rgba(0,0,0,.8); animation: mjfade .2s ease;
+}
+
+/* profile gate (full screen) */
+.mj-gate { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.mj-gate-inner { width: 100%; max-width: 420px; text-align: center; }
+.mj-gate-mark { font-size: 44px; display: block; margin-bottom: 6px; }
+.mj-gate-title {
+  font-family: 'Newsreader', serif; font-size: 22px; color: ${T.cream};
+  margin-bottom: 22px;
+}
+.mj-gate-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.mj-gate-profile {
+  display: flex; align-items: center; gap: 14px; cursor: pointer; text-align: left;
+  background: ${T.panel}; border: 1px solid ${T.edge}; border-radius: 14px;
+  padding: 14px 16px; transition: transform .12s, border-color .15s;
+}
+.mj-gate-profile:hover { transform: translateY(-2px); border-color: ${T.gold}; }
+.mj-gate-pname { font-size: 16px; color: ${T.cream}; font-weight: 600; flex: 1; }
+.mj-gate-psub { font-size: 12.5px; color: ${T.muted}; }
+.mj-gate-add {
+  width: 100%; background: none; border: 1px dashed ${T.edge}; cursor: pointer;
+  color: ${T.muted}; border-radius: 12px; padding: 13px; font-size: 14px;
+  font-family: 'Inter', sans-serif; font-weight: 500;
+}
+.mj-gate-add:hover { border-color: ${T.gold}; color: ${T.cream}; }
+.mj-gate-form { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.mj-gate-form .mj-input { width: 100%; text-align: center; max-height: none; }
+.mj-colorrow { display: flex; gap: 12px; }
+.mj-colordot {
+  width: 30px; height: 30px; border-radius: 50%; border: none; cursor: pointer;
+}
+.mj-gate-form .mj-done { width: 100%; }
+.mj-gate-back { background: none; border: none; cursor: pointer; color: ${T.muted}; font-size: 13px; }
+
+/* profile switch sheet */
+.mj-sheet-profile {
+  display: flex; align-items: center; gap: 13px; width: 100%; cursor: pointer;
+  background: ${T.panel}; border: 1px solid ${T.edge}; border-radius: 12px;
+  padding: 12px 14px; margin-bottom: 9px; text-align: left;
+}
+.mj-sheet-profile:hover { border-color: ${T.gold}; }
+.mj-sheet-profile-me { border-color: ${T.tealDim}; }
+.mj-sheet-pname { flex: 1; font-size: 15px; color: ${T.cream}; font-weight: 500; }
+.mj-sheet-psub { font-size: 13px; color: ${T.muted}; }
+.mj-youtag {
+  display: inline-block; margin-left: 8px; font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: ${T.teal}; border: 1px solid ${T.tealDim};
+  border-radius: 5px; padding: 1px 6px; vertical-align: middle;
+}
+
+/* together / accountability */
+.mj-together { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mj-climb {
+  position: relative; height: 230px; margin: 4px 0 22px;
+  background: linear-gradient(${T.panel}, ${T.canvas});
+  border: 1px solid ${T.edge}; border-radius: 16px; overflow: hidden;
+}
+.mj-climb-flag {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; color: ${T.gold}; letter-spacing: .05em;
+}
+.mj-climb-start {
+  position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: ${T.muted}; letter-spacing: .08em; text-transform: uppercase;
+}
+.mj-climber {
+  position: absolute; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  transition: bottom .5s cubic-bezier(.2,.8,.2,1);
+}
+.mj-climber-name { font-size: 11px; color: ${T.cream}; }
+.mj-statcard {
+  background: ${T.panel}; border: 1px solid ${T.edge}; border-radius: 14px;
+  padding: 15px 16px; margin-bottom: 12px;
+}
+.mj-statcard-me { border-color: ${T.tealDim}; }
+.mj-statcard-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.mj-statcard-id { flex: 1; }
+.mj-statcard-name { font-size: 16px; color: ${T.cream}; font-weight: 600; }
+.mj-statcard-sub { font-size: 12px; color: ${T.muted}; margin-top: 1px; }
+.mj-nudge {
+  background: ${T.gold}; border: none; color: #1a1205; cursor: pointer;
+  border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600;
+  font-family: 'Inter', sans-serif; transition: transform .12s;
+}
+.mj-nudge:hover { transform: translateY(-1px); }
+.mj-statgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.mj-statnum { font-family: 'Newsreader', serif; font-size: 28px; color: ${T.cream}; line-height: 1; }
+.mj-statden { font-size: 16px; color: ${T.muted}; }
+.mj-statlbl { font-size: 12px; color: ${T.muted}; margin: 4px 0 7px; }
+
+/* progress ring on the current path node */
+.mj-node-ring {
+  position: absolute; width: 76px; height: 76px; top: -5px; left: -5px;
+  pointer-events: none;
+}
+
+/* correct-answer celebration */
+.mj-cheer {
+  position: fixed; left: 50%; top: 42%; z-index: 80; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center;
+  transform: translate(-50%, -50%);
+  animation: mj-cheer-in 1.6s cubic-bezier(.2,1.3,.4,1) forwards;
+}
+.mj-cheer-glow {
+  position: absolute; width: 240px; height: 240px; border-radius: 50%;
+  top: 50%; left: 50%; transform: translate(-50%, -58%);
+  background: radial-gradient(circle, rgba(97,227,164,.5), rgba(97,227,164,0) 70%);
+}
+.mj-cheer-img {
+  width: 190px; max-width: 56vw; position: relative;
+  filter: drop-shadow(0 0 18px rgba(97,227,164,.6)) drop-shadow(0 12px 22px rgba(0,0,0,.55));
+}
+.mj-cheer-thumb {
+  font-size: 42px; margin-top: -12px; position: relative;
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,.5));
+  animation: mj-thumb .5s ease .08s both;
+}
+@keyframes mj-cheer-in {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.5); }
+  14% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+  24% { transform: translate(-50%, -50%) scale(1); }
+  78% { opacity: 1; transform: translate(-50%, -54%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -62%) scale(.96); }
+}
+@keyframes mj-thumb {
+  0% { transform: scale(0) rotate(-18deg); }
+  60% { transform: scale(1.25) rotate(4deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+/* shared streak */
+.mj-streak {
+  display: flex; align-items: center; gap: 14px;
+  background: ${T.panel}; border: 1px solid ${T.edge}; border-radius: 16px;
+  padding: 16px 18px; margin-bottom: 18px;
+}
+.mj-streak-on { border-color: ${T.gold}; background: linear-gradient(150deg, #2a2415, ${T.panel}); }
+.mj-streak-flame { font-size: 34px; line-height: 1; }
+.mj-streak-num { font-family: 'Newsreader', serif; font-size: 24px; color: ${T.cream}; line-height: 1; }
+.mj-streak-lbl { font-size: 12.5px; color: ${T.muted}; margin-top: 3px; }
+
+/* step sheet */
+.mj-step-eyebrow {
+  font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  font-weight: 700; margin-bottom: 2px;
+}
+.mj-step-lessons { display: flex; flex-direction: column; gap: 9px; margin-top: 6px; }
+.mj-step-lesson {
+  display: flex; align-items: center; gap: 13px; width: 100%; cursor: pointer;
+  text-align: left; background: ${T.panel}; border: 1px solid ${T.edge};
+  border-radius: 12px; padding: 13px 15px;
+}
+.mj-step-lesson:disabled { opacity: .5; cursor: default; }
+.mj-step-lesson-next { background: ${T.panelHi}; }
+.mj-step-dot {
+  width: 26px; height: 26px; border-radius: 50%; border: 2px solid;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; flex: none;
+}
+.mj-step-ltitle { flex: 1; color: ${T.cream}; font-size: 15px; font-weight: 500; }
+.mj-step-lstatus { font-size: 12px; color: ${T.muted}; }
+
+:focus-visible { outline: 2px solid ${T.gold}; outline-offset: 2px; }
+`;
